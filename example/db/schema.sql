@@ -190,3 +190,18 @@ COMMENT ON COLUMN projects.tenant_id IS '租户ID [@hidden]';
 COMMENT ON COLUMN projects.owner_user_id IS '归属用户ID [@hidden]';
 COMMENT ON COLUMN projects.created_at IS '创建时间 [@dynamic: range @sortable @selectable]';
 COMMENT ON TABLE  projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]';
+
+-- audit_logs 表:pk-only 最小接入形态——表级 @pk 单独入选,零 @dynamic 列:
+-- 仅生成 List/Count/Parse/Schema 骨架(无过滤能力),验证零 ops 产物可编译。
+CREATE TABLE audit_logs (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    actor_id   BIGINT      NOT NULL,
+    action     TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON COLUMN audit_logs.id         IS 'ID';
+COMMENT ON COLUMN audit_logs.actor_id   IS '操作人';
+COMMENT ON COLUMN audit_logs.action     IS '动作';
+COMMENT ON COLUMN audit_logs.created_at IS '时间';
+COMMENT ON TABLE  audit_logs IS '审计日志 [@pk: id]';

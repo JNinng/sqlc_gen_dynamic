@@ -56,7 +56,18 @@ func (tc *tableCode) parseSection() string {
 	b.WriteString("\tcfg, err := dynq.NewQueryConfig(" + tc.reg + "Registry, opts...)\n")
 	b.WriteString("\tif err != nil {\n\t\treturn List" + tc.res + "Params{}, err\n\t}\n")
 	b.WriteString("\tvar out List" + tc.res + "Params\n")
-	b.WriteString("\tslots := dynq.NewSlots()\n")
+	// slots 仅被携带 op 的列引用(每个 op case 都执行槽位占用);零 ops 表
+	// 不生成,避免悬空变量。
+	hasOps := false
+	for _, c := range spec.Columns {
+		if len(c.Ops) > 0 {
+			hasOps = true
+			break
+		}
+	}
+	if hasOps {
+		b.WriteString("\tslots := dynq.NewSlots()\n")
+	}
 	b.WriteString("\tbudget := dynq.NewBudget()\n\n")
 	// fields
 	b.WriteString("\t// 解析投影字段:显式空数组、@hidden 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。\n")

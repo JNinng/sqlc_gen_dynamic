@@ -98,6 +98,18 @@ func (ns NullUserStatus) Value() (driver.Value, error) {
 	return string(ns.UserStatus), nil
 }
 
+// 审计日志 [@pk: id]
+type AuditLog struct {
+	// ID
+	ID int64 `db:"id" json:"id"`
+	// 操作人
+	ActorID int64 `db:"actor_id" json:"actor_id"`
+	// 动作
+	Action string `db:"action" json:"action"`
+	// 时间
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+}
+
 // 客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted('customers', user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]
 type Customer struct {
 	// ID [@dynamic: exact @sortable @selectable]

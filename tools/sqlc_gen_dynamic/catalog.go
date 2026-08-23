@@ -105,7 +105,7 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, erro
 		}
 	}
 	if len(order) == 0 {
-		return nil, fmt.Errorf("no tables with @dynamic declarations found in schema %q (annotate columns with [@dynamic: ...] or list tables in options)", opts.Schema)
+		return nil, fmt.Errorf("no tables selected for dynamic generation in schema %q (opt a table in via table comment [@pk: <col>], any column [@dynamic: ...], or options.tables)", opts.Schema)
 	}
 	return order, nil
 }

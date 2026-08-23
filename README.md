@@ -69,7 +69,7 @@ sha256sum bin/sqlc_gen_dynamic.wasm
 | `@hidden` | 列 | 全能力排除:不参与投影/点名/过滤/排序/schema/游标;与上述任一正向标记组合 → 生成期 fail |
 | `@default_sort: <列> <ASC\|DESC>` | 表 | 缺省排序回落;目标列必须已声明 `@sortable` |
 | `@page: <默认>/<上限>` | 表 | 分页每页条数默认与上限(协议键 `pageSize`) |
-| `@pk: <列>` | 表 | 主键列(tiebreaker),含动态能力的表必填;指向可空列或 `@hidden` 列 → 生成期 fail |
+| `@pk: <列>` | 表 | 主键列(tiebreaker),所有被生成的表必填;**单独声明即纳入生成**(零 `@dynamic` 列的最小接入形态,仅 List/Count/分页骨架);指向可空列或 `@hidden` 列 → 生成期 fail |
 | `@scope: <列> <op> <函数>(<参数>,...) ...` | 表 | 行级数据权限:多守卫 OR 组合。op ∈ `in`(集合守卫)/`eq`/`gt`/`gte`/`lt`/`lte`(标量守卫);参数为标识符 `name:type`(类型词表 `varchar`/`int`→int64/`bool`/`varchar[]`/`int[]`/`jsonb`,值来自生成的 Scope 结构体)或字面量(`'字符串'`/整数,内联);目标列须存在、可与 `@hidden` 组合,一列一守卫;见下方[行级数据权限](#行级数据权限scope) |
 
 预设展开:

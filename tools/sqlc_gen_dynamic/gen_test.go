@@ -87,6 +87,33 @@ func TestGenerateGolden(t *testing.T) {
 	}
 }
 
+// TestGeneratePkOnlyTable 覆盖零 @dynamic 列的最小接入形态(表级 @pk 单独入选):
+// 生成必须成功且产物可编译——不残留未使用的 "time" import 与 slots 变量。
+func TestGeneratePkOnlyTable(t *testing.T) {
+	req := loadGoldenRequest(t)
+	users := findTable(req, "users")
+	for _, c := range users.Columns {
+		c.Comment = "" // 剥离全部列级指令,仅保留人类注释
+	}
+	users.Comment = "用户表 [@pk: id]"
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for _, f := range resp.Files {
+		if f.Name != "users_dynamic_gen.go" {
+			continue
+		}
+		src := string(f.Contents)
+		if strings.Contains(src, "\t\"time\"\n") {
+			t.Errorf("pk-only table must not import \"time\" (no *time.Time params emitted)")
+		}
+		if strings.Contains(src, "slots") {
+			t.Errorf("pk-only table must not reference slots (no op cases emitted)")
+		}
+	}
+}
+
 func TestGenerateTablesFilter(t *testing.T) {
 	req := loadGoldenRequest(t)
 	req.PluginOptions = []byte(`{

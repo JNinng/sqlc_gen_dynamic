@@ -8,11 +8,10 @@
 version: "2"
 plugins:
   - name: "sqlc_gen_dynamic"
-#    process:
-#      cmd: "bin/sqlc_gen_dynamic"
-    wasm:
-      url: "https://github.com/JNinng/sqlc_gen_dynamic/releases/download/v0.1.0/sqlc_gen_dynamic-v0.1.0.wasm"
-      sha256: "97dbb974a506941e41b020c6309f6b2e47b27e2b1659c08f9945818d4a7b540e"
+    # 开发态:process 模式(make sqlc 构建本地插件)。发版后切回 wasm 模式
+    # 以 url+sha256 锁定发布资产(产物必须与发布插件版本一致,防自举漂移)。
+    process:
+      cmd: "bin/sqlc_gen_dynamic"
     # 透传给插件进程的环境变量白名单(如 DYNQ_DUMP_REQUEST=path 做 dump-first 验证)。
     env:
       - "DYNQ_DUMP_REQUEST"

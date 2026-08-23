@@ -127,9 +127,11 @@ func (tc *tableCode) headerSection() string {
 }
 
 func (tc *tableCode) importsSection() string {
+	// time 仅在 Params 书写 *time.Time / []time.Time 字段时被引用;
+	// 仅 is_null/not_null 的列只产 bool 字段,不引用列 GoType。
 	needTime := false
 	for _, c := range tc.spec.Columns {
-		if strings.Contains(c.GoType, "time.Time") {
+		if hasValueOp(c.Ops) && strings.Contains(c.GoType, "time.Time") {
 			needTime = true
 		}
 	}
@@ -398,6 +400,18 @@ func orderedOps(ops []string) []string {
 		}
 	}
 	return out
+}
+
+// hasValueOp 报告 ops 是否含携带值的操作符(is_null/not_null 仅产 bool 槽位)。
+func hasValueOp(ops []string) bool {
+	for _, op := range ops {
+		switch op {
+		case "is_null", "not_null":
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // coerceCall 返回标量收敛表达式(不含错误处理)。

@@ -5,7 +5,7 @@ go 1.26.2
 require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/jninng/sqlc_gen_dynamic v0.0.0
+	github.com/jninng/sqlc_gen_dynamic v0.1.0
 )
 
 require (
@@ -19,4 +19,4 @@ require (
 	golang.org/x/text v0.29.0 // indirect
 )
 
-replace github.com/jninng/sqlc_gen_dynamic => ../
+// replace github.com/jninng/sqlc_gen_dynamic => ../

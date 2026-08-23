@@ -136,7 +136,7 @@ COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC
 | `sort` | `order` | string | `asc`/`desc` 大小写不敏感 |
 | `pagination` | `page` | int | 从 1 起,≤ 0 拒绝;仅 offset 模式生效 |
 | `pagination` | `pageSize` | int | 双模式共用每页条数;显式提供且 ≤ 0、或超 `pagination.maxPageSize` 拒绝;缺省 = `defaultPageSize` |
-| `pagination` | `after` | string \| null | **非空即游标模式**(深分页,见下);与 `page > 1` 混用 → 400;空串 `""` 非法 |
+| `pagination` | `after` | string \| null | **非空即游标模式**(深分页,见下方"游标翻页调用流程");与 `page > 1` 混用 → 400;空串 `""` 非法 |
 | `pagination` | `includeTotal` | bool | 是否计算 total;默认 true;false 时响应 `total` 为 null 且不执行 COUNT |
 
 ### where 语义
@@ -153,6 +153,70 @@ COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC
 | `after` 为非空字符串 | 游标(keyset) | `pageSize` 作为 limit;`page` 必须缺省或 = 1;无累计翻页深度限制 |
 
 游标是**不透明凭证**(base64url + 排序指纹):换排序、跨表复用旧游标 → 400 `fingerprint mismatch`;篡改最坏导致空集或 400。**offset 模式同样返回 `nextCursor`**——客户端首页正常请求,随时可携带它无缝切换游标模式续翻。
+
+#### 游标翻页调用流程(入参解读)
+
+游标模式面向深分页 / 无限滚动:`pagination.after` 填**上一页响应返回的 `nextCursor`**,原样透传即可——不解析、不拼接、不修改。请求与响应均以 JSON 为主:
+
+**第 1 页(offset 模式,不传 `after`)**:
+
+```json
+{
+  "pagination": { "page": 1, "pageSize": 20 }
+}
+```
+
+响应(`nextCursor` 为续翻凭证,其余字段省略):
+
+```json
+{
+  "items": [ { "…": "…" } ],
+  "total": 42,
+  "page": 1,
+  "pageSize": 20,
+  "nextCursor": "eyJmIjoiMTIzNDU2Nzg5MCIsInYiOlszMCw1XX0",
+  "hasMore": true
+}
+```
+
+**第 2 页(游标模式)**:把上一页响应的 `nextCursor` 原样填入 `pagination.after`:
+
+```json
+{
+  "pagination": { "pageSize": 20, "after": "eyJmIjoiMTIzNDU2Nzg5MCIsInYiOlszMCw1XX0" }
+}
+```
+
+此后每页都取上一页响应中的**新 `nextCursor`** 填入 `after`,直到 `hasMore=false` 为止。
+
+`after` 的值(base64url)解码后是如下 JSON 结构(仅示意):
+
+```json
+{
+  "f": "1234567890",
+  "v": [30, 5]
+}
+```
+
+`f` 是本资源有效排序的排序指纹(十进制字符串),`v` 是与排序一一对应的排序列值。协议面上 `after` 的类型是 `string \| null`,客户端只透传、不解析、不构造。
+
+调用方需注意的入参约束:
+
+- **`after` 非空即进入游标模式**:此时 `page` 必须缺省或 = 1,`page > 1` 与 `after` 同时出现 → 400;空串 `""` 也是非法游标。
+- **`after` 只对本资源 + 本排序有效**:换排序、跨表、跨能力视图复用旧游标 → 400 `fingerprint mismatch`——排序变化由服务端强制校验(指纹含资源名与有效排序),无需客户端自行判断。
+- **`where` 也必须与生成游标时保持一致**:排序指纹不含 where,服务端**不会拦截** where 变化——但换过滤条件后,游标定位(排序位置)与新的过滤叠加,结果是"满足新 where 且排序在游标行之后"的行,可能出现跳过行或空页,且**不报错**。因此 **where 或 sort 任一变化,都应丢弃旧 `after` 重新从首页翻**。
+- **游标模式下 `pageSize` 即每页条数**(limit);`includeTotal` 照常生效,`total` 语义不变(满足过滤条件的总数,与翻页位置无关)。
+- **`nextCursor` 仅 `hasMore=true` 时返回**;offset 模式的首页响应同样携带它,客户端随时可无缝切到游标模式续翻,无需重新发起首页请求。
+- **游标是不透明凭证,不含权限信息**:被篡改最坏导致空集或 400,不可能越权读到数据;真正的鉴权在 handler 层按业务做。
+
+**上一页:缓存每页的 `nextCursor` 即可回翻**(游标模式本身单向,无需服务端 `before` 支持)。游标是确定性的——同一 `after` + 同一过滤/排序 → 同一页数据,因此客户端保存已访问各页的 `nextCursor` 序列,回到第 K 页就是把第 K-1 页响应的 `nextCursor` 重新作为 `after` 发出:
+
+```text
+cursors = [null, c1, c2, c3, ...]   // cK = 第 K 页响应的 nextCursor
+fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 after
+```
+
+缓存的是轻量游标字符串(每页几十字节),远优于缓存 `items` 本体;回到旧页后响应仍带新的 `nextCursor` 与 `hasMore`,可继续前进,"上一页 → 下一页"往返都成立。此方案仅在同一过滤 + 排序的视图内有效(改视图后旧游标会 `fingerprint mismatch`,清空缓存重翻首页);翻页期间数据变动时,重发同一 `after` 的页可能轻微漂移——与 keyset 分页对数据变动的固有敏感一致。
 
 ### 响应信封
 

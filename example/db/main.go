@@ -206,23 +206,35 @@ func demoConflict(pool *pgxpool.Pool) {
 }
 
 func demoOffset(ctx context.Context, pool *pgxpool.Pool) {
-	p := mustParse(&dynq.Query{Pagination: &dynq.Pagination{Page: intPtr(2), PageSize: intPtr(3)}})
+	const page, pageSize = 2, 3
+	p := mustParse(&dynq.Query{Pagination: &dynq.Pagination{Page: intPtr(page), PageSize: intPtr(pageSize)}})
 	res, err := gen.ListUsers(ctx, pool, p)
 	if err != nil {
 		fmt.Println("   error:", err)
 		return
 	}
-	fmt.Printf("   has_more=%v next_cursor=%q\n", res.HasMore, truncate(res.NextCursor, 24))
-	for _, u := range res.Items {
-		fmt.Printf("   [%d] %s | created=%s\n", u.ID, u.Name, u.CreatedAt.Time.Format("2006-01-02 15:04"))
+	total, err := gen.CountUsers(ctx, pool, p)
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
 	}
+	// 返回信封:total / items 行数 / page / page_size / has_more / next_cursor(items 明细略)。
+	fmt.Printf("   total=%d items=%d page=%d page_size=%d has_more=%v next_cursor=%q\n",
+		total, len(res.Items), page, pageSize, res.HasMore, truncate(res.NextCursor, 24))
 	fmt.Println()
 }
 
 func demoCursor(ctx context.Context, pool *pgxpool.Pool) {
+	// total 与翻页位置无关:循环外统计一次,各页应保持一致。
+	base := mustParse(&dynq.Query{Sort: []dynq.SortItem{{Field: "score", Order: "asc"}}})
+	total, err := gen.CountUsers(ctx, pool, base)
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
 	after := ""
 	var ids []int64
-	for page := 0; ; page++ {
+	for page := 1; ; page++ {
 		pq := &dynq.Query{
 			Sort:       []dynq.SortItem{{Field: "score", Order: "asc"}},
 			Pagination: &dynq.Pagination{PageSize: intPtr(5)},
@@ -239,7 +251,10 @@ func demoCursor(ctx context.Context, pool *pgxpool.Pool) {
 		for _, u := range res.Items {
 			ids = append(ids, u.ID)
 		}
-		fmt.Printf("   第 %d 页: %d 行 has_more=%v\n", page+1, len(res.Items), res.HasMore)
+		// 返回信封:total / items 行数 / has_more / next_cursor(items 明细略);
+		// 首页为 offset 模式,续翻后各页携带上一页的 next_cursor。
+		fmt.Printf("   第 %d 页: total=%d items=%d has_more=%v next_cursor=%q\n",
+			page, total, len(res.Items), res.HasMore, truncate(res.NextCursor, 24))
 		if !res.HasMore || res.NextCursor == "" {
 			break
 		}

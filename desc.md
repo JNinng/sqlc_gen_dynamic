@@ -186,7 +186,7 @@ diff。CI 中 sqlc 版本固定。
 
 为消除人类自然语言注释与机器解析指令的歧义，DSL 引入**边界分隔符**，指令必须包裹在 `[ ]` 中且内容以 `@` 起始。
 **列级**：`<label> [@dynamic: <项,项,...>] [@sortable] [@hidden] [@selectable] [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]`
-**表级**：`[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>]`
+**表级**：`[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...]`
 
 ```sql
 COMMENT ON COLUMN users.id         IS 'ID [@dynamic: exact, in @sortable @selectable]';
@@ -197,6 +197,7 @@ COMMENT ON COLUMN users.status     IS '状态 [已废弃] [@dynamic: exact, in @
 COMMENT ON COLUMN users.deleted_at IS '删除时间 [@dynamic: range, is_null, not_null]';
 COMMENT ON COLUMN orders.user_id   IS '用户ID [@dynamic: eq, in @selectable @api: /api/v1/users/options value_key=id label_key=name]';
 COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC @page: 20/200]';
+COMMENT ON TABLE  customers        IS '客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted(''customers'', user_id:varchar) @pk: id]';
 ```
 
 **`@api`（引用字段选项数据源）**：服务于**引用型 ID 选择器**（user_id / assignee_id 等，值为动态业务数据）——该字段
@@ -217,7 +218,7 @@ where 值控件的 options 经 `GET {endpoint}` 拉取，而非静态 `enum`。�
 3. **Label 纯洁性**：非指令块文本（含其中出现的任何 `@` 符号与方括号）原样保留为展示文本，不触发任何解析逻辑。
 4. **多指令块**：同一列允许多个指令块，按出现顺序合并解析；同名指令重复声明等价于声明一次（去重）。
 5. **指令识别**：合法列级指令为 `@dynamic` / `@sortable` / `@hidden` / `@selectable` / `@api`；合法表级指令为 `@default_sort` /
-   `@page`。`[ ]` 内出现白名单外的 `@xxx`（如手误 `@sortble`）→ **生成期 fail**，报错定位到具体列与未知标签名，杜绝静默忽略导致的能力丢失。
+   `@page` / `@pk` / `@scope`。`[ ]` 内出现白名单外的 `@xxx`（如手误 `@sortble`）→ **生成期 fail**，报错定位到具体列与未知标签名，杜绝静默忽略导致的能力丢失。
 6. **无 `[ ]` 或无指令块的纯文本注释**：纯业务说明，直接作为 label，跳过解析。
 7. **无 `@dynamic` 的列**不参与过滤能力生成（受 `default_ops` 控制）。
 8. **`is_null` / `not_null` 完全独立**：二者互不捆绑、不入任何预设；列可空不会自动获得它们，必须逐个显式声明；声明于非空列 →
@@ -238,7 +239,25 @@ where 值控件的 options 经 `GET {endpoint}` 拉取，而非静态 `enum`。�
     - `@selectable` 是**纯 UI 提示**：服务端 `fields` 点名白名单 = 全部非 `@hidden` 列；`@selectable` 不参与服务端校验，仅流入前端
       schema 决定列头渲染与显隐交互。
 11. **表级指令校验**：`@default_sort` 的目标列必须存在、已声明 `@sortable` 且非 `@hidden`，方向必填，否则生成期 fail；`@page`
-    的默认值必须 ≤ 上限。
+    的默认值必须 ≤ 上限；`@scope` 见下方专节。
+
+**`@scope`（行级数据权限）**：表级微型语法 `<列> <op> <函数>(<参数,...>)`，多守卫恒为 OR 组合。权限规则集中在 DB
+守卫函数里只写一次，函数定义在 sqlc 可见的 schema 内随迁移版本化。要点：
+
+- **op 封闭集合** `in|eq|gt|gte|lt|lte`：`in` 为集合守卫（`col IN (SELECT * FROM fn(...))`，fn 单列返回、类型与目标列
+  一致）；其余为标量守卫（`col = fn(...)` 等，NULL 列对比较恒为假——不可见，fail-closed 方向）。刻意排除
+  `neq`/`not_in`（`NOT IN` 撞集合含 NULL 恒空，权限事故配方）。
+- **参数**：标识符参数 `name:type`（类型词表 varchar→string、int→int64、bool、varchar[]→[]string、int[]→[]int64、
+  jsonb→json.RawMessage，词表外生成期 fail）或字面量参数（`'字符串'`/整数，经分词器校验后内联）；允许零参。
+  函数名须为小写标识符（可带一层 schema 限定）——拼进 SQL 字面量故严格校验，杜绝注入面。
+- **生成形态**：标识符参数并集生成 per-table `XxxScope` 结构体（同名参数类型冲突、不同参数名折叠同一 Go 字段名
+  均生成期 fail）；`buildXxxWhere` 头部按声明内联穷举守卫谓词（零反射、编译期类型检查），与业务条件 AND，
+  List/Count 共用 → total 与 items 权限视图天然一致；IN-子查询与不相关标量函数单语句内只求值一次。
+- **注入与 fail-closed**：`params.Scope` 为保留字段（`*XxxScope`），协议门结构性无法设置；服务端经
+  `dynq.WithScope(ctx, &XxxScope{...})` + `dynq.ScopeFromContext[XxxScope](ctx)` 注入；缺省 Scope 时
+  List/Count fail-closed 报错（`Kind=scope`），不静默退化为全量可见。
+- **硬边界**：一列一守卫（重复声明 fail）；参数不做行相关（相关子查询退化为逐行求值）；AND 复合逻辑
+  （租户 AND 归属）写进函数内部或交给 RLS，DSL 保持扁平 OR。
 
 ### 5.4 预设展开
 

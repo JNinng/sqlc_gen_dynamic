@@ -19,8 +19,8 @@ make sqlc
 # 全量测试:dynq 单测 + 插件 golden 测试(无数据库依赖;example 包随测编译)
 make test
 
-# 动态查询演示:启动即重建测试库 → 应用 schema → 种子数据 → 跑 8 组查询演示
-# (过滤/冲突拒绝/offset 分页/游标翻页/窄投影/opts 禁用/schema/跨表游标互斥)
+# 动态查询演示:启动即重建测试库 → 应用 schema → 种子数据 → 跑 9 组查询演示
+# (过滤/冲突拒绝/offset 分页/游标翻页/窄投影/opts 禁用/schema/跨表游标互斥/@scope 行级数据权限)
 go run ./example/db
 
 # 生成后 git diff 锁 gen 目录,防 schema 漂移(CI 用固定版本 sqlc 执行)
@@ -70,6 +70,7 @@ sha256sum bin/sqlc_gen_dynamic.wasm
 | `@default_sort: <列> <ASC\|DESC>` | 表 | 缺省排序回落;目标列必须已声明 `@sortable` |
 | `@page: <默认>/<上限>` | 表 | 分页每页条数默认与上限(协议键 `pageSize`) |
 | `@pk: <列>` | 表 | 主键列(tiebreaker),含动态能力的表必填;指向可空列或 `@hidden` 列 → 生成期 fail |
+| `@scope: <列> <op> <函数>(<参数>,...) ...` | 表 | 行级数据权限:多守卫 OR 组合。op ∈ `in`(集合守卫)/`eq`/`gt`/`gte`/`lt`/`lte`(标量守卫);参数为标识符 `name:type`(类型词表 `varchar`/`int`→int64/`bool`/`varchar[]`/`int[]`/`jsonb`,值来自生成的 Scope 结构体)或字面量(`'字符串'`/整数,内联);目标列须存在、可与 `@hidden` 组合,一列一守卫;见下方[行级数据权限](#行级数据权限scope) |
 
 预设展开:
 
@@ -103,6 +104,8 @@ COMMENT ON COLUMN users.name       IS '姓名 [@dynamic: fuzzy, exact @sortable 
 COMMENT ON COLUMN users.password   IS '密码 [@hidden]';
 COMMENT ON COLUMN users.deleted_at IS '删除时间 [@dynamic: is_null, not_null]';
 COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]';
+
+COMMENT ON TABLE  customers        IS '客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted(''customers'', user_id:varchar) @pk: id]';
 ```
 
 ## 查询入参契约(`POST /{resource}/list`)
@@ -207,7 +210,7 @@ COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC
 - **`where` 也必须与生成游标时保持一致**:排序指纹不含 where,服务端**不会拦截** where 变化——但换过滤条件后,游标定位(排序位置)与新的过滤叠加,结果是"满足新 where 且排序在游标行之后"的行,可能出现跳过行或空页,且**不报错**。因此 **where 或 sort 任一变化,都应丢弃旧 `after` 重新从首页翻**。
 - **游标模式下 `pageSize` 即每页条数**(limit);`includeTotal` 照常生效,`total` 语义不变(满足过滤条件的总数,与翻页位置无关)。
 - **`nextCursor` 仅 `hasMore=true` 时返回**;offset 模式的首页响应同样携带它,客户端随时可无缝切到游标模式续翻,无需重新发起首页请求。
-- **游标是不透明凭证,不含权限信息**:被篡改最坏导致空集或 400,不可能越权读到数据;真正的鉴权在 handler 层按业务做。
+- **游标是不透明凭证,不含权限信息**:被篡改最坏导致空集或 400,不可能越权读到数据;行级数据权限见下方 [@scope 机制](#行级数据权限scope)(游标重放同样受权限谓词约束,只收窄不放行)。
 
 **上一页:缓存每页的 `nextCursor` 即可回翻**(游标模式本身单向,无需服务端 `before` 支持)。游标是确定性的——同一 `after` + 同一过滤/排序 → 同一页数据,因此客户端保存已访问各页的 `nextCursor` 序列,回到第 K 页就是把第 K-1 页响应的 `nextCursor` 重新作为 `after` 发出:
 
@@ -243,6 +246,43 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
 **错误形态**:所有校验失败返回结构化错误 `{ "kind": "where"\|"sort"\|"fields"\|"pagination"\|"cursor", "field": …, "index": …, "reason": … }`(kind=cursor 定位到游标内容,其余定位到数组下标),无静默修正。
 
 **typed 门**(内部调用方):直接构造生成的 `ListUsersParams` 结构体(编译期安全),经 `ListUsers` / `CountUsers` 执行;形态复核(禁用命中、Limit/Offset 上限、After 与 Offset 互斥)与协议门汇合于同一路径,错误为 Go error 而非 400。
+
+## 行级数据权限(@scope)
+
+表级指令 `@scope: <列> <op> <函数>(<参数>,...) ...` 为动态表声明行级数据权限:权限规则集中在 DB 守卫函数里只写一次(显式参数、可单独 `SELECT * FROM fn(...)` 测试、定义在 sqlc 可见的 schema 内随迁移版本化),业务代码零权限感知。example 的 `customers`(三条 OR 守卫:归属用户集合 / 归属部门集合 / 显式共享字面量参数)与 `projects`(eq 租户标量守卫)即完整演示。
+
+### 机制
+
+- **DSL 声明**:多条守卫恒为 OR 组合(任一命中即可见);op 复用业务操作符语义矩阵,SQL 语义同源:
+
+  | op | SQL 形态 | fn 返回 |
+  |---|---|---|
+  | `in` | `col IN (SELECT * FROM fn(...))` | 单列集合,类型与目标列一致 |
+  | `eq` | `col = fn(...)` | 标量;**NULL 列对比较恒为假(不可见,fail-closed 方向)** |
+  | `gt`/`gte`/`lt`/`lte` | `col > fn(...)` 等(时间窗权限) | 标量 |
+
+  刻意排除 `neq`/`not_in`——`NOT IN` 撞上集合含 NULL 时恒空,是权限事故配方。
+- **参数**:标识符参数 `name:type`(类型词表 `varchar`→string、`int`→**int64**、`bool`、`varchar[]`→[]string、`int[]`→[]int64、`jsonb`→json.RawMessage,词表外类型生成期 fail;字段汇入该表的 `XxxScope` 结构体,多守卫同名参数去重合并、类型冲突 fail)或字面量参数(`'字符串'`/整数,校验后内联进 SQL);允许零参函数。
+- **守卫函数契约**:函数本体不在 sqlc catalog,不做存在性校验(与 `@api` endpoint 同一信任级别),由部署侧保证;函数名须为小写标识符(可带一层 schema 限定,会拼进 SQL 字面量故严格校验)。
+- **谓词注入**:`buildXxxWhere` 头部按声明内联生成守卫谓词(零反射,编译期类型检查),与业务条件 AND;IN-子查询与不相关标量函数在单条语句内只求值一次;List 与 Count 共用 → **total 与 items 的权限视图天然一致**。
+- **fail-closed**:声明 `@scope` 的表,`params.Scope` 为 nil 时 List/Count 直接报错(`Kind=scope`),宁可拒绝服务也不静默退化为全量可见。
+- **协议门结构性隔离**:客户端 JSON 不存在设置 Scope 的通道,权限值只能来自服务端注入。
+- **硬边界**:一列一守卫(重复声明 fail);参数不做行相关(不允许引用本行其他列——相关子查询退化为逐行求值);需要 AND 复合逻辑(租户 AND 归属)时写进函数内部或交给 RLS 层,DSL 保持扁平 OR。
+
+### 调用形态
+
+```go
+// middleware:认证解析后一次注入(Scope 类型按资源生成,字段与守卫参数一一对应)
+ctx = dynq.WithScope(ctx, &gen.CustomersScope{UserID: "u4", Scopes: []int64{2, 3}})
+
+// handler:业务参数照常解析,权限一行补齐
+params, err := gen.ParseCustomersQuery(q)
+params.Scope = dynq.ScopeFromContext[gen.CustomersScope](ctx)
+items, err := gen.ListCustomers(ctx, db, params)
+total, err := gen.CountCustomers(ctx, db, params) // 同一 params → 同一权限视图
+```
+
+`Scope` 是 Params 的保留字段,与业务槽位"零值=条件不参与"不同——它为 nil 是显式错误。守卫谓词不占协议门的条件冲突槽位,与业务条件正交叠加(如权限视图内再按 `name contains` 收窄);`scopes int[]` 一类数组参数天然承载多角色并集语义(函数内 `= ANY`)。游标重放受权限谓词约束:权限收窄后旧游标最坏跳行/空页,不可能越权读到数据。
 
 ## 前端 Schema(UI 契约)
 

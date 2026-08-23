@@ -34,8 +34,8 @@ func fnv64a(s string) uint64 {
 	return h
 }
 
-// cursorPayload 是游标 JSON 载荷:f 为排序指纹的十进制字符串(字符串编码避免
-// JS 大整数精度问题),v 为有效排序(含 tiebreaker)依序的列值。
+// cursorPayload 是游标 JSON 载荷:f 为排序指纹的十进制字符串(用字符串编码,
+// 避免 JS 大整数精度问题),v 为按有效排序顺序排列的列值。
 type cursorPayload struct {
 	F string `json:"f"`
 	V []any  `json:"v"`
@@ -67,9 +67,8 @@ func EncodeCursor(fp uint64, seq []SortField, vals []any) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
-// DecodeCursor 解码并校验游标:base64url/JSON 解码、排序指纹比对、列值逐个
-// 类型收敛比对 dataType,不符 → 错误(Kind = cursor)。此为双门唯一校验路径,
-// typed 门直接构造 After 时走完全相同的路径。
+// DecodeCursor 解码并校验游标:base64url/JSON 解码、比对排序指纹、按 dataType
+// 收敛列值类型,不符 → 错误(Kind = cursor)。协议门与 typed 门共用此校验路径。
 func DecodeCursor(cursor string, fp uint64, seq []SortField) ([]any, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(cursor)
 	if err != nil {

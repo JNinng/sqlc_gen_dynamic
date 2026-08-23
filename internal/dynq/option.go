@@ -2,9 +2,9 @@ package dynq
 
 import "fmt"
 
-// QueryOption 是运行期能力收窄选项:对生成期白名单的纯减法投影——只能禁用、
-// 不能开启。禁用为集合语义(幂等、可交换、去重);有效能力 = 生成期白名单 − 禁用集,
-// 四个消费点(Parse / List / Count / Schema)同参。
+// QueryOption 是运行期能力收窄选项:只能禁用生成期白名单中的能力,不能新增。
+// 禁用按集合处理(幂等、可交换、去重);有效能力为生成期白名单去掉禁用项,
+// Parse / List / Count / Schema 四个消费点使用同一份 opts。
 type QueryOption func(*optionState)
 
 type optionState struct {
@@ -29,8 +29,8 @@ func DisableSelect(fields ...FieldName) QueryOption {
 }
 
 // QueryConfig 是 opts 应用于某表 registry 后的有效能力视图。
-// 禁用目标不在 registry(含跨表误用)→ error 显式暴露编程错误——
-// 禁用是权限收窄手段,静默 no-op 会制造安全假象。
+// 禁用目标不在 registry(含跨表误用)→ error 显式暴露编程错误;
+// 禁用是权限收窄手段,静默失效会掩盖"以为禁了实际没禁"的问题。
 type QueryConfig struct {
 	meta           TableMeta
 	whereDisabled  map[FieldName]struct{}

@@ -34,12 +34,9 @@ func ParseSelectFields(raw []string, cfg *QueryConfig, meta TableMeta) ([]FieldN
 	return out, nil
 }
 
-// SelectColumns 构造实际投影(投影并集不变量):
-//
-//	(SelectFields 映射的物理列;nil → 全部非 hidden 列) ∪ 有效排序列(含 tiebreaker)
-//
-// 排序列无条件强制并入,保证游标构造与 has_more 探测在任何 fields 收窄下都成立;
-// sortable 蕴含非 hidden,故并入集不可能含敏感列。列名全部来自白名单。
+// SelectColumns 构造实际 SELECT 列:投影列并集排序列。排序列无条件并入,
+// 保证投影任意收窄时游标构造与 has_more 探测都成立;sortable 列必然非 hidden,
+// 并入的排序列不可能含敏感列。列名全部来自白名单。
 func SelectColumns(meta TableMeta, selectFields []FieldName, seq []SortField) []string {
 	var cols []string
 	if selectFields == nil {

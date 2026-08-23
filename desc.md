@@ -855,7 +855,7 @@ schema 输出字段级 `api` 对象：
 
 ```text
 tools/sqlc_gen_dynamic/     # 插件本体：entry_process.go / entry_wasm.go / gen.go / 模板
-internal/dynq/              # 运行时库（手写，含全部运行时单测：收敛/游标/QueryOption/冲突检测）
+dynq/                     # 运行时库（手写，含全部运行时单测：收敛/游标/QueryOption/冲突检测）
 example/                    # 示例与测试用独立工程
  ├── db/schema.sql          # DDL + 注释 DSL（示例单一事实源）
  ├── db/queries.sql         # 固定形态查询示例

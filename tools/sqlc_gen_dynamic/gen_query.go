@@ -42,9 +42,16 @@ func (c *ColumnSpec) whereCast() string {
 func (tc *tableCode) parseSection() string {
 	spec := tc.spec
 	var b strings.Builder
-	fmt.Fprintf(&b, "// Parse%sQuery 是协议门:JSON 信封(经 dynq.DecodeQuery 严格解码)→ typed Params。\n", tc.res)
-	b.WriteString("// 穷举 switch、零反射;条件冲突定位到后一条下标;\n")
-	b.WriteString("// 默认排序回落与 tiebreaker 不在此做,统一由查询函数解析(与游标指纹同源)。\n")
+	fmt.Fprintf(&b, "// Parse%sQuery 是协议门:将严格解码后的 JSON 查询信封转换为 typed 查询参数。\n", tc.res)
+	b.WriteString("// 解析过程为穷举 switch,零反射;排序回落与游标内容校验统一在查询函数执行。\n")
+	b.WriteString("//\n")
+	b.WriteString("// 参数:\n")
+	b.WriteString("//   - q:   查询信封,需先经 dynq.DecodeQuery 严格解码。\n")
+	b.WriteString("//   - opts: 运行期能力收窄选项;禁用目标不在 registry 时返回错误。\n")
+	b.WriteString("//\n")
+	b.WriteString("// 返回值:\n")
+	fmt.Fprintf(&b, "//   - List%sParams: 解析后的查询参数,可直接传给 List%s/Count%s。\n", tc.res, tc.res, tc.res)
+	b.WriteString("//   - error:          解析失败时的结构化错误(字段未知、op 越权、条件冲突、类型不符等)。\n")
 	fmt.Fprintf(&b, "func Parse%sQuery(q *dynq.Query, opts ...dynq.QueryOption) (List%sParams, error) {\n", tc.res, tc.res)
 	b.WriteString("\tcfg, err := dynq.NewQueryConfig(" + tc.reg + "Registry, opts...)\n")
 	b.WriteString("\tif err != nil {\n\t\treturn List" + tc.res + "Params{}, err\n\t}\n")
@@ -52,12 +59,12 @@ func (tc *tableCode) parseSection() string {
 	b.WriteString("\tslots := dynq.NewSlots()\n")
 	b.WriteString("\tbudget := dynq.NewBudget()\n\n")
 	// fields
-	b.WriteString("\t// fields:显式空数组拒绝;hidden/禁用/未知拒绝;去重保序。\n")
+	b.WriteString("\t// 解析投影字段:显式空数组、@hidden 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。\n")
 	fmt.Fprintf(&b, "\tselectFields, err := dynq.ParseSelectFields(q.Fields, cfg, %sRegistry)\n", tc.reg)
 	b.WriteString("\tif err != nil {\n\t\treturn out, err\n\t}\n")
 	b.WriteString("\tout.SelectFields = selectFields\n\n")
 	// where
-	b.WriteString("\t// where:恒为 AND 语义;条数与占位符预算上限。\n")
+	b.WriteString("\t// 解析过滤条件:条件之间恒为 AND 语义;条件条数与占位符预算均受上限约束。\n")
 	b.WriteString("\tif len(q.Where) > dynq.MaxWhere {\n\t\treturn out, dynq.ErrTooManyConditions()\n\t}\n")
 	b.WriteString("\tfor i, c := range q.Where {\n")
 	fmt.Fprintf(&b, "\t\tidx, ok := %sFieldIndex[dynq.FieldName(c.Field)]\n", tc.reg)
@@ -93,7 +100,7 @@ func (tc *tableCode) parseSection() string {
 		}
 	}
 	// sort
-	b.WriteString("\n\t// sort:白名单校验 + 归一化为逻辑键。\n")
+	b.WriteString("\n\t// 解析排序:字段须在注册表内且可排序;方向归一化为 asc/desc,并转为逻辑键。\n")
 	b.WriteString("\tfor i, s := range q.Sort {\n")
 	fmt.Fprintf(&b, "\t\tidx, ok := %sFieldIndex[dynq.FieldName(s.Field)]\n", tc.reg)
 	b.WriteString("\t\tif !ok {\n\t\t\treturn out, dynq.NewErr(dynq.KindSort, s.Field, \"unknown field\", i)\n\t\t}\n")
@@ -106,8 +113,7 @@ func (tc *tableCode) parseSection() string {
 	b.WriteString("\t\tout.OrderBy = append(out.OrderBy, dynq.OrderBy{Field: f.Key, Desc: desc})\n")
 	b.WriteString("\t}\n")
 	// pagination
-	b.WriteString("\n\t// 分页:模式判定 + 归一化(page→Offset、page_size→Limit);\n")
-	b.WriteString("\t// after 仅形态判定后透传,内容校验统一在查询函数。\n")
+	b.WriteString("\n\t// 解析分页:判定 offset/游标模式并归一化(page→Offset、pageSize→Limit)。\n")
 	fmt.Fprintf(&b, "\tlimit, offset, after, err := dynq.NormalizePagination(%sRegistry, q.Pagination)\n", tc.reg)
 	b.WriteString("\tif err != nil {\n\t\treturn out, err\n\t}\n")
 	b.WriteString("\tout.Limit, out.Offset, out.After = limit, offset, after\n")
@@ -163,8 +169,15 @@ func (c *ColumnSpec) HasOp(op string) bool {
 func (tc *tableCode) validateSection() string {
 	spec := tc.spec
 	var b strings.Builder
-	fmt.Fprintf(&b, "// validate%sParams 是 List/Count 共享的形态复核(双门汇合点):\n", tc.res)
-	b.WriteString("// where 域禁用字段携带非零值、IsNull/NotNull 同真均显式拒绝,不静默剔除。\n")
+	fmt.Fprintf(&b, "// validate%sParams 校验 params 在当前 opts 下的合法性,List 与 Count 共用。\n", tc.res)
+	b.WriteString("// 禁用字段携带非零值、IsNull 与 NotNull 同时为真均显式报错,不做静默剔除。\n")
+	b.WriteString("//\n")
+	b.WriteString("// 参数:\n")
+	b.WriteString("//   - params: 待复核的查询参数。\n")
+	b.WriteString("//   - cfg:    经 opts 投影后的运行期配置。\n")
+	b.WriteString("//\n")
+	b.WriteString("// 返回值:\n")
+	b.WriteString("//   - error: 复核通过返回 nil,否则返回结构化错误。\n")
 	fmt.Fprintf(&b, "func validate%sParams(params List%sParams, cfg *dynq.QueryConfig) error {\n", tc.res, tc.res)
 	for _, c := range spec.Columns {
 		exprs := paramRefExprs(&c)
@@ -190,9 +203,14 @@ func (tc *tableCode) validateSection() string {
 func (tc *tableCode) whereSection() string {
 	spec := tc.spec
 	var b strings.Builder
-	fmt.Fprintf(&b, "// build%sWhere 是过滤 WHERE 的单一事实源(List 与 Count 共享);\n", tc.res)
-	b.WriteString("// 游标 seek 谓词与 LIMIT 仅作用于 List。所有值经占位符参数化,\n")
-	b.WriteString("// 列名/op 为白名单字面量;调用前已完成禁用与形态校验。\n")
+	fmt.Fprintf(&b, "// build%sWhere 构建过滤 WHERE 条件,List 与 Count 共用,过滤结果一致。\n", tc.res)
+	b.WriteString("// 所有值均经占位符参数化,列名与操作符为白名单字面量。\n")
+	b.WriteString("//\n")
+	b.WriteString("// 参数:\n")
+	b.WriteString("//   - params: 已通过 validate 形态复核的查询参数。\n")
+	b.WriteString("//\n")
+	b.WriteString("// 返回值:\n")
+	b.WriteString("//   - []sq.Sqlizer: 按 AND 语义组合的过滤条件列表。\n")
 	fmt.Fprintf(&b, "func build%sWhere(params List%sParams) []sq.Sqlizer {\n", tc.res, tc.res)
 	b.WriteString("\tvar conds []sq.Sqlizer\n")
 	for _, c := range spec.Columns {

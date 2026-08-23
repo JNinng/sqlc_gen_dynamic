@@ -34,8 +34,9 @@ import (
 	dynq "sqlc_gen_dynamic/internal/dynq"
 )
 
-// userRegistry 是本表生成期元数据:协议校验白名单、typed Params、前端 schema
-// 三投影同源(由构造保证,物理上不可能漂移)。运行期能力 = registry − opts 禁用集。
+// userRegistry 是本表的生成期元数据:协议校验白名单、typed 查询参数与前端
+// schema 均由该元数据生成,三者由构造保证一致。运行期能力为 registry 能力
+// 减去 opts 禁用项(纯减法,只能禁用不能开启)。
 var usersRegistry = dynq.TableMeta{
 	Resource: "users",
 	Table:    "users",
@@ -227,6 +228,7 @@ var usersRegistry = dynq.TableMeta{
 	PageMax:     200,
 }
 
+// usersFieldIndex 是逻辑字段名到 registry 字段下标的映射,供白名单校验使用。
 var usersFieldIndex = map[dynq.FieldName]int{
 	"id":        0,
 	"name":      1,
@@ -246,10 +248,11 @@ var usersFieldIndex = map[dynq.FieldName]int{
 	"deletedAt": 15,
 }
 
+// usersStatusEnumVals 是 status 字段的合法枚举值白名单,供类型收敛校验使用。
 var usersStatusEnumVals = []string{"active", "inactive", "banned"}
 
-// UserField 是逻辑字段常量:禁用选项、OrderBy、SelectFields 引用;
-// IDE 可补全,拼错无法通过编译(hidden 列不提供常量)。
+// UserField 提供逻辑字段常量,供禁用选项、OrderBy 与 SelectFields 引用。
+// 字段名拼写错误将在编译期被捕获;@hidden 列不提供常量。
 var UserField = struct {
 	ID        dynq.FieldName
 	Name      dynq.FieldName
@@ -284,10 +287,14 @@ var UserField = struct {
 	DeletedAt: "deletedAt",
 }
 
-// ListUsersParams 是 typed 门的查询参数(内部调用方直接构造,编译期安全)。
-// 单字段单值,天然无法表达协议门拒绝的条件冲突——冲突检测只存在于协议门。
-// 区间与集合字段 nil/空 = 不参与过滤;模糊三 op 零值 "" = 不参与;
-// IsNull/NotNull false = 不参与且互斥。
+// ListUsersParams 是 typed 门的查询参数,供内部调用方直接构造(编译期安全)。
+// 每个字段以单值承载一个操作符,因此无法表达协议门可拒绝的条件冲突——
+// 冲突检测仅在协议门执行。
+//
+// 各操作符字段的零值语义:
+//   - 指针/切片字段为 nil 或空时,该条件不参与过滤;
+//   - 模糊匹配字段为零值 "" 时,该条件不参与过滤;
+//   - IsNull/NotNull 为 false 时不参与,二者同时为 true 非法。
 type ListUsersParams struct {
 	ID               *int64
 	IDNeq            *int64
@@ -353,20 +360,28 @@ type ListUsersParams struct {
 	UpdatedAtNotNull bool
 	DeletedAtIsNull  bool
 	DeletedAtNotNull bool
-	// OrderBy 排序(逻辑字段名 + 方向);nil = 回落表级 @default_sort。
+	// OrderBy 指定排序(逻辑字段名与方向);为 nil 时回落表级 @default_sort。
 	OrderBy []dynq.OrderBy
-	// SelectFields 动态投影(逻辑键);nil = 默认全量投影(所有非 hidden 列)。
+	// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @hidden 列)。
 	SelectFields []dynq.FieldName
-	// Limit/Offset 是 offset 模式归一化结果;Limit=0 视为表默认 page_size。
-	Limit  uint32
+	// Limit 为 offset 模式的每页条数,为 0 时使用表级默认 pageSize。
+	Limit uint32
+	// Offset 为 offset 模式的偏移量,仅在 offset 模式生效。
 	Offset uint32
-	// After 是游标模式不透明游标;nil = offset 模式,与 Offset > 0 互斥。
+	// After 为游标模式的不透明续翻凭证;为 nil 时使用 offset 模式,与 Offset>0 互斥。
 	After *string
 }
 
-// ParseUsersQuery 是协议门:JSON 信封(经 dynq.DecodeQuery 严格解码)→ typed Params。
-// 穷举 switch、零反射;条件冲突定位到后一条下标;
-// 默认排序回落与 tiebreaker 不在此做,统一由查询函数解析(与游标指纹同源)。
+// ParseUsersQuery 是协议门:将严格解码后的 JSON 查询信封转换为 typed 查询参数。
+// 解析过程为穷举 switch,零反射;排序回落与游标内容校验统一在查询函数执行。
+//
+// 参数:
+//   - q:   查询信封,需先经 dynq.DecodeQuery 严格解码。
+//   - opts: 运行期能力收窄选项;禁用目标不在 registry 时返回错误。
+//
+// 返回值:
+//   - ListUsersParams: 解析后的查询参数,可直接传给 ListUsers/CountUsers。
+//   - error:          解析失败时的结构化错误(字段未知、op 越权、条件冲突、类型不符等)。
 func ParseUsersQuery(q *dynq.Query, opts ...dynq.QueryOption) (ListUsersParams, error) {
 	cfg, err := dynq.NewQueryConfig(usersRegistry, opts...)
 	if err != nil {
@@ -376,14 +391,14 @@ func ParseUsersQuery(q *dynq.Query, opts ...dynq.QueryOption) (ListUsersParams, 
 	slots := dynq.NewSlots()
 	budget := dynq.NewBudget()
 
-	// fields:显式空数组拒绝;hidden/禁用/未知拒绝;去重保序。
+	// 解析投影字段:显式空数组、@hidden 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。
 	selectFields, err := dynq.ParseSelectFields(q.Fields, cfg, usersRegistry)
 	if err != nil {
 		return out, err
 	}
 	out.SelectFields = selectFields
 
-	// where:恒为 AND 语义;条数与占位符预算上限。
+	// 解析过滤条件:条件之间恒为 AND 语义;条件条数与占位符预算均受上限约束。
 	if len(q.Where) > dynq.MaxWhere {
 		return out, dynq.ErrTooManyConditions()
 	}
@@ -1170,7 +1185,7 @@ func ParseUsersQuery(q *dynq.Query, opts ...dynq.QueryOption) (ListUsersParams, 
 		return out, dynq.NewErr(dynq.KindWhere, "deletedAt", "is_null and not_null are mutually exclusive", -1)
 	}
 
-	// sort:白名单校验 + 归一化为逻辑键。
+	// 解析排序:字段须在注册表内且可排序;方向归一化为 asc/desc,并转为逻辑键。
 	for i, s := range q.Sort {
 		idx, ok := usersFieldIndex[dynq.FieldName(s.Field)]
 		if !ok {
@@ -1193,8 +1208,7 @@ func ParseUsersQuery(q *dynq.Query, opts ...dynq.QueryOption) (ListUsersParams, 
 		out.OrderBy = append(out.OrderBy, dynq.OrderBy{Field: f.Key, Desc: desc})
 	}
 
-	// 分页:模式判定 + 归一化(page→Offset、page_size→Limit);
-	// after 仅形态判定后透传,内容校验统一在查询函数。
+	// 解析分页:判定 offset/游标模式并归一化(page→Offset、pageSize→Limit)。
 	limit, offset, after, err := dynq.NormalizePagination(usersRegistry, q.Pagination)
 	if err != nil {
 		return out, err
@@ -1203,8 +1217,15 @@ func ParseUsersQuery(q *dynq.Query, opts ...dynq.QueryOption) (ListUsersParams, 
 	return out, nil
 }
 
-// validateUsersParams 是 List/Count 共享的形态复核(双门汇合点):
-// where 域禁用字段携带非零值、IsNull/NotNull 同真均显式拒绝,不静默剔除。
+// validateUsersParams 校验 params 在当前 opts 下的合法性,List 与 Count 共用。
+// 禁用字段携带非零值、IsNull 与 NotNull 同时为真均显式报错,不做静默剔除。
+//
+// 参数:
+//   - params: 待复核的查询参数。
+//   - cfg:    经 opts 投影后的运行期配置。
+//
+// 返回值:
+//   - error: 复核通过返回 nil,否则返回结构化错误。
 func validateUsersParams(params ListUsersParams, cfg *dynq.QueryConfig) error {
 	if cfg.WhereDisabled("id") && (params.ID != nil || params.IDNeq != nil || params.IDIn != nil || params.IDNotIn != nil) {
 		return dynq.NewErr(dynq.KindWhere, "id", "field disabled in this context", -1)
@@ -1260,9 +1281,14 @@ func validateUsersParams(params ListUsersParams, cfg *dynq.QueryConfig) error {
 	return dynq.ValidateTypedSelectFields(params.SelectFields, cfg, usersRegistry)
 }
 
-// buildUsersWhere 是过滤 WHERE 的单一事实源(List 与 Count 共享);
-// 游标 seek 谓词与 LIMIT 仅作用于 List。所有值经占位符参数化,
-// 列名/op 为白名单字面量;调用前已完成禁用与形态校验。
+// buildUsersWhere 构建过滤 WHERE 条件,List 与 Count 共用,过滤结果一致。
+// 所有值均经占位符参数化,列名与操作符为白名单字面量。
+//
+// 参数:
+//   - params: 已通过 validate 形态复核的查询参数。
+//
+// 返回值:
+//   - []sq.Sqlizer: 按 AND 语义组合的过滤条件列表。
 func buildUsersWhere(params ListUsersParams) []sq.Sqlizer {
 	var conds []sq.Sqlizer
 	if params.ID != nil {
@@ -1460,8 +1486,14 @@ func buildUsersWhere(params ListUsersParams) []sq.Sqlizer {
 	return conds
 }
 
-// usersCursorValues 从模型行提取有效排序(含 tiebreaker)依序的列值。
-// 投影并集不变量保证这些列必然在 SELECT 中(窄投影下排序列强制并入)。
+// usersCursorValues 提取用于构造 nextCursor 的排序列值,顺序与有效排序一致。
+//
+// 参数:
+//   - row: 查询结果中的一行模型。
+//   - seq: 排序列及方向,顺序与游标值顺序一致。
+//
+// 返回值:
+//   - []any: 与 seq 一一对应的列值切片。
 func usersCursorValues(row User, seq []dynq.SortField) []any {
 	vals := make([]any, len(seq))
 	for i, sf := range seq {
@@ -1489,10 +1521,20 @@ func usersCursorValues(row User, seq []dynq.SortField) []any {
 	return vals
 }
 
-// ListUsers 执行动态查询:opts → 能力投影 → 形态复核 → 有效排序 → 游标校验
-// → 投影并集 → 过滤 WHERE → seek → LIMIT n+1。生成代码为纯函数,
-// 不持有连接状态;total 由 CountUsers 单独承担(非强一致快照)。
-// 扫描用 RowToStructByNameLax:未查询列留零值(动态投影固有语义)。
+// ListUsers 按 params 的过滤、排序、投影与分页条件查询列表页。
+// 返回本页行、是否还有下一页与续翻游标;total 由 CountUsers 单独计算
+// (非强一致快照)。生成代码为纯函数,不持有连接状态。
+// 未查询列在结果中留零值(动态投影固有语义),需区分时按请求 fields 做 DTO 化。
+//
+// 参数:
+//   - ctx:    查询上下文。
+//   - db:     数据库连接,满足 DBTX 接口即可。
+//   - params: typed 查询参数,可由 ParseUsersQuery 产出或直接构造。
+//   - opts:   运行期能力收窄选项;禁用目标不在 registry 时返回错误。
+//
+// 返回值:
+//   - dynq.Result[User]: 本页行、是否还有下一页与续翻游标。
+//   - error:              查询或校验失败时的错误。
 func ListUsers(ctx context.Context, db DBTX, params ListUsersParams, opts ...dynq.QueryOption) (dynq.Result[User], error) {
 	cfg, err := dynq.NewQueryConfig(usersRegistry, opts...)
 	if err != nil {
@@ -1505,17 +1547,17 @@ func ListUsers(ctx context.Context, db DBTX, params ListUsersParams, opts ...dyn
 	if err != nil {
 		return dynq.Result[User]{}, err
 	}
-	// ③ 有效排序解析:用户排序 / @default_sort 回落 / 主键 tiebreaker / 显式 NULLS 方位。
+	// 解析有效排序:未指定排序时回落表级 @default_sort。
 	seq, err := dynq.ResolveSort(usersRegistry, cfg, params.OrderBy)
 	if err != nil {
 		return dynq.Result[User]{}, err
 	}
 	fp := dynq.CursorFingerprint(usersRegistry.Resource, seq)
-	// ⑤ 投影并集:(SelectFields 映射列 | 全部非 hidden 列)∪ 有效排序列(含 tiebreaker)。
+	// 计算 SELECT 列:投影列并集排序列(排序所需列始终参与查询)。
 	cols := dynq.SelectColumns(usersRegistry, params.SelectFields, seq)
 	b := sq.Select(cols...).From("users").PlaceholderFormat(sq.Dollar).Where(sq.And(buildUsersWhere(params))).
 		OrderBy(dynq.OrderBySQL(seq)).Limit(uint64(limit) + 1)
-	// ④⑦ 游标解码 + 指纹比对 + 值类型收敛 + seek 谓词(双门唯一路径,仅 List 追加)。
+	// After 非 nil 时为游标模式:解码并校验游标,从该位置继续读取。
 	if params.After != nil {
 		vals, err := dynq.DecodeCursor(*params.After, fp, seq)
 		if err != nil {
@@ -1542,7 +1584,7 @@ func ListUsers(ctx context.Context, db DBTX, params ListUsersParams, opts ...dyn
 	if err != nil {
 		return dynq.Result[User]{}, err
 	}
-	// ⑨ LIMIT n+1 探测 has_more;next_cursor 由第 limit 行的有效排序列值构造。
+	// 以 LIMIT n+1 探测是否还有下一页,并构造 nextCursor。
 	hasMore := len(items) > int(limit)
 	if hasMore {
 		items = items[:limit]
@@ -1557,8 +1599,18 @@ func ListUsers(ctx context.Context, db DBTX, params ListUsersParams, opts ...dyn
 	return dynq.Result[User]{Items: items, HasMore: hasMore, NextCursor: next}, nil
 }
 
-// CountUsers 只吃过滤 WHERE(total 语义 = 满足过滤条件的总数,与分页模式、
-// 游标位置无关);忽略投影、排序与游标,参数形态错误仍由共享复核拦截。
+// CountUsers 统计满足过滤条件的行数,与分页模式和游标位置无关;
+// 忽略投影、排序与游标。
+//
+// 参数:
+//   - ctx:    查询上下文。
+//   - db:     数据库连接,满足 DBTX 接口即可。
+//   - params: typed 查询参数,与 ListUsers 使用同一份形态复核。
+//   - opts:   运行期能力收窄选项。
+//
+// 返回值:
+//   - int64: 满足过滤条件的行数。
+//   - error: 查询或校验失败时返回错误。
 func CountUsers(ctx context.Context, db DBTX, params ListUsersParams, opts ...dynq.QueryOption) (int64, error) {
 	cfg, err := dynq.NewQueryConfig(usersRegistry, opts...)
 	if err != nil {
@@ -1581,14 +1633,20 @@ func CountUsers(ctx context.Context, db DBTX, params ListUsersParams, opts ...dy
 	return total, nil
 }
 
-// UsersQuerySchema 是前端契约出口:返回经 opts 减法投影后的有效能力全集。
-// Schema 是(生成期元数据, opts)的确定性纯函数:同 opts 产出字节级相同
-// schema,内容 hash 作 ETag;被禁用字段不出现在 schema 中。
+// UsersQuerySchema 是前端契约出口:返回经 opts 减法投影后的有效能力全集,
+// 前端据此渲染查询组件。Schema 是(生成期元数据, opts)的确定性纯函数,
+// 同一 opts 产出字节级相同结果,内容 hash 可作 ETag;被禁用字段不出现于 schema。
+//
+// 参数:
+//   - opts: 运行期能力收窄选项,须与 Parse/List/Count 使用同一份 opts。
+//
+// 返回值:
+//   - dynq.ResourceSchema: 前端渲染所需的能力描述(字段、操作符、排序、分页配置)。
 func UsersQuerySchema(opts ...dynq.QueryOption) dynq.ResourceSchema {
 	cfg, err := dynq.NewQueryConfig(usersRegistry, opts...)
 	if err != nil {
-		// 禁用目标不在 registry 是编程错误:Parse/List/Count/Schema 四点同参
-		// 纪律下此处 panic 显式暴露,绝不静默吞掉制造安全假象。
+		// 禁用目标不在 registry 属于编程错误。Parse/List/Count/Schema 四点同参纪律
+		// 下,此处 panic 显式暴露;静默吞错会掩盖权限收窄失效。
 		panic(err)
 	}
 	return dynq.BuildSchema(usersRegistry, cfg)

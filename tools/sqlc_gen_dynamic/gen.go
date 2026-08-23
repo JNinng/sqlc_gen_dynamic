@@ -179,8 +179,9 @@ var opConst = map[string]string{
 func (tc *tableCode) registrySection() string {
 	spec := tc.spec
 	var b strings.Builder
-	fmt.Fprintf(&b, "// %sRegistry 是本表生成期元数据:协议校验白名单、typed Params、前端 schema\n", lowerFirst(spec.Singular))
-	b.WriteString("// 三投影同源(由构造保证,物理上不可能漂移)。运行期能力 = registry − opts 禁用集。\n")
+	fmt.Fprintf(&b, "// %sRegistry 是本表的生成期元数据:协议校验白名单、typed 查询参数与前端\n", lowerFirst(spec.Singular))
+	b.WriteString("// schema 均由该元数据生成,三者由构造保证一致。运行期能力为 registry 能力\n")
+	b.WriteString("// 减去 opts 禁用项(纯减法,只能禁用不能开启)。\n")
 	fmt.Fprintf(&b, "var %sRegistry = dynq.TableMeta{\n", tc.reg)
 	fmt.Fprintf(&b, "\tResource: %q,\n", spec.Resource)
 	fmt.Fprintf(&b, "\tTable:    %q,\n", tableNameQualified(spec.Name, tc.opts))
@@ -235,6 +236,7 @@ func (tc *tableCode) registrySection() string {
 	fmt.Fprintf(&b, "\tPageMax:     %d,\n", spec.PageMax)
 	b.WriteString("}\n\n")
 
+	fmt.Fprintf(&b, "// %sFieldIndex 是逻辑字段名到 registry 字段下标的映射,供白名单校验使用。\n", tc.reg)
 	fmt.Fprintf(&b, "var %sFieldIndex = map[dynq.FieldName]int{\n", tc.reg)
 	for i, c := range spec.Columns {
 		fmt.Fprintf(&b, "\t%q: %d,\n", c.Key, i)
@@ -249,7 +251,8 @@ func (tc *tableCode) registrySection() string {
 		for i, v := range c.EnumVals {
 			quoted[i] = strconv.Quote(v)
 		}
-		fmt.Fprintf(&b, "\nvar %s%sEnumVals = []string{%s}\n", tc.reg, c.GoConst, strings.Join(quoted, ", "))
+		fmt.Fprintf(&b, "\n// %s%sEnumVals 是 %s 字段的合法枚举值白名单,供类型收敛校验使用。\n", tc.reg, c.GoConst, c.Key)
+		fmt.Fprintf(&b, "var %s%sEnumVals = []string{%s}\n", tc.reg, c.GoConst, strings.Join(quoted, ", "))
 	}
 	return b.String()
 }
@@ -264,8 +267,8 @@ func dataTypeOrRaw(dt string) string {
 func (tc *tableCode) fieldConstSection() string {
 	spec := tc.spec
 	var b strings.Builder
-	fmt.Fprintf(&b, "// %sField 是逻辑字段常量:禁用选项、OrderBy、SelectFields 引用;\n", spec.Singular)
-	b.WriteString("// IDE 可补全,拼错无法通过编译(hidden 列不提供常量)。\n")
+	fmt.Fprintf(&b, "// %sField 提供逻辑字段常量,供禁用选项、OrderBy 与 SelectFields 引用。\n", spec.Singular)
+	b.WriteString("// 字段名拼写错误将在编译期被捕获;@hidden 列不提供常量。\n")
 	fmt.Fprintf(&b, "var %sField = struct {\n", spec.Singular)
 	for _, c := range spec.Columns {
 		if c.Hidden {
@@ -297,10 +300,14 @@ var opSuffix = map[string]string{
 func (tc *tableCode) paramsSection() string {
 	spec := tc.spec
 	var b strings.Builder
-	fmt.Fprintf(&b, "// List%sParams 是 typed 门的查询参数(内部调用方直接构造,编译期安全)。\n", tc.res)
-	b.WriteString("// 单字段单值,天然无法表达协议门拒绝的条件冲突——冲突检测只存在于协议门。\n")
-	b.WriteString("// 区间与集合字段 nil/空 = 不参与过滤;模糊三 op 零值 \"\" = 不参与;\n")
-	b.WriteString("// IsNull/NotNull false = 不参与且互斥。\n")
+	fmt.Fprintf(&b, "// List%sParams 是 typed 门的查询参数,供内部调用方直接构造(编译期安全)。\n", tc.res)
+	b.WriteString("// 每个字段以单值承载一个操作符,因此无法表达协议门可拒绝的条件冲突——\n")
+	b.WriteString("// 冲突检测仅在协议门执行。\n")
+	b.WriteString("//\n")
+	b.WriteString("// 各操作符字段的零值语义:\n")
+	b.WriteString("//   - 指针/切片字段为 nil 或空时,该条件不参与过滤;\n")
+	b.WriteString("//   - 模糊匹配字段为零值 \"\" 时,该条件不参与过滤;\n")
+	b.WriteString("//   - IsNull/NotNull 为 false 时不参与,二者同时为 true 非法。\n")
 	fmt.Fprintf(&b, "type List%sParams struct {\n", tc.res)
 	for _, c := range spec.Columns {
 		if c.Hidden {
@@ -338,14 +345,15 @@ func (tc *tableCode) paramsSection() string {
 			}
 		}
 	}
-	b.WriteString("\t// OrderBy 排序(逻辑字段名 + 方向);nil = 回落表级 @default_sort。\n")
+	b.WriteString("\t// OrderBy 指定排序(逻辑字段名与方向);为 nil 时回落表级 @default_sort。\n")
 	b.WriteString("\tOrderBy []dynq.OrderBy\n")
-	b.WriteString("\t// SelectFields 动态投影(逻辑键);nil = 默认全量投影(所有非 hidden 列)。\n")
+	b.WriteString("\t// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @hidden 列)。\n")
 	b.WriteString("\tSelectFields []dynq.FieldName\n")
-	b.WriteString("\t// Limit/Offset 是 offset 模式归一化结果;Limit=0 视为表默认 page_size。\n")
+	b.WriteString("\t// Limit 为 offset 模式的每页条数,为 0 时使用表级默认 pageSize。\n")
 	b.WriteString("\tLimit  uint32\n")
+	b.WriteString("\t// Offset 为 offset 模式的偏移量,仅在 offset 模式生效。\n")
 	b.WriteString("\tOffset uint32\n")
-	b.WriteString("\t// After 是游标模式不透明游标;nil = offset 模式,与 Offset > 0 互斥。\n")
+	b.WriteString("\t// After 为游标模式的不透明续翻凭证;为 nil 时使用 offset 模式,与 Offset>0 互斥。\n")
 	b.WriteString("\tAfter *string\n")
 	b.WriteString("}\n")
 	return b.String()

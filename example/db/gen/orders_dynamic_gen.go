@@ -20,7 +20,7 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
-	dynq "sqlc_gen_dynamic/internal/dynq"
+	dynq "github.com/jninng/sqlc_gen_dynamic/dynq"
 )
 
 // orderRegistry 是本表的生成期元数据:协议校验白名单、typed 查询参数与前端

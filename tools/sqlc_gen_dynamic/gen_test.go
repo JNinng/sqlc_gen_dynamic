@@ -18,7 +18,7 @@ import (
 
 const goldenOptions = `{
   "package": "gen",
-  "runtime_import": "sqlc_gen_dynamic/internal/dynq",
+  "runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
   "schema": "public",
   "default_ops": "none",
   "page_default": 20,
@@ -91,7 +91,7 @@ func TestGenerateTablesFilter(t *testing.T) {
 	req := loadGoldenRequest(t)
 	req.PluginOptions = []byte(`{
 		"package": "gen",
-		"runtime_import": "sqlc_gen_dynamic/internal/dynq",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
 		"tables": ["orders"]
 	}`)
 	resp, err := Generate(context.Background(), req)

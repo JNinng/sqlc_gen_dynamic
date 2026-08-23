@@ -89,4 +89,4 @@ func ParseOptions(req *pb.GenerateRequest) (*Options, error) {
 	return opts, nil
 }
 
-const defaultRuntimeImport = "sqlc_gen_dynamic/internal/dynq"
+const defaultRuntimeImport = "github.com/jninng/sqlc_gen_dynamic/dynq"

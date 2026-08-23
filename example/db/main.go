@@ -19,8 +19,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"sqlc_gen_dynamic/example/db/gen"
-	"sqlc_gen_dynamic/internal/dynq"
+	"github.com/jninng/sqlc_gen_dynamic/dynq"
+	"example/db/gen"
 )
 
 const (

@@ -35,7 +35,7 @@ sql:
         out: "gen"
         options:
           package: "gen"
-          runtime_import: "sqlc_gen_dynamic/internal/dynq"
+          runtime_import: "github.com/jninng/sqlc_gen_dynamic/dynq"
           schema: "public"
           default_ops: "none"
           page_default: 20

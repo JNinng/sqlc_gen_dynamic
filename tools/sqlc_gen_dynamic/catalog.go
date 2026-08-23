@@ -46,6 +46,15 @@ type TableSpec struct {
 	PageDefault     int
 	PageMax         int
 	TableDirectives []string
+	Scope           []scopeGuard  // @scope 守卫声明;空 = 未声明
+	ScopeParams     []scopeParam  // 守卫标识符参数的并集(声明序),驱动 Scope 结构体
+}
+
+// scopeParam 是 Scope 结构体的一个字段来源:DSL 参数名 + Go 类型。
+type scopeParam struct {
+	Name    string
+	GoConst string
+	GoType  string
 }
 
 type sortDirective struct {
@@ -259,6 +268,19 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		spec.Tiebreaker = camelKey(t.Payload)
 		spec.TableDirectives = append(spec.TableDirectives, "@pk: "+t.Payload)
 	}
+	if t, ok := findTag(tableTags, "scope"); ok {
+		guards, err := parseScopeDirective(tableWhere, t)
+		if err != nil {
+			return nil, false, err
+		}
+		spec.Scope = guards
+		spec.TableDirectives = append(spec.TableDirectives, "@scope: "+scopeEcho(guards))
+		params, err := scopeParamsOf(tableWhere, guards)
+		if err != nil {
+			return nil, false, err
+		}
+		spec.ScopeParams = params
+	}
 
 	_, hasPK := findTag(tableTags, "pk")
 	included := hasDynamicDecl || hasPK
@@ -396,6 +418,22 @@ func validateTable(spec *TableSpec) error {
 		}
 	}
 
+	// @scope 目标列必须存在;不与列能力矩阵耦合——scope 列可以 @hidden、
+	// 可以无 @dynamic、可以是任意 PG 类型(类型契约由守卫函数返回形态保证:
+	// in 为单列集合且类型一致,eq/比较类为标量且可比较)。
+	for _, g := range spec.Scope {
+		found := false
+		for _, c := range spec.Columns {
+			if c.Physical == g.Column {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("table %s: @scope column %q not found", spec.Name, g.Column)
+		}
+	}
+
 	// sortable 列的类型限制:numeric(pgtype.Numeric 无法编码游标值)与
 	// int_array(数组 seek 谓词无法参数化)不可排序。
 	for _, c := range spec.Columns {
@@ -413,4 +451,34 @@ func validateTable(spec *TableSpec) error {
 		}
 	}
 	return nil
+}
+
+// scopeParamsOf 汇总全部守卫的标识符参数(声明序去重)为 Scope 结构体字段来源:
+// 同名参数类型不一致、不同参数名折叠为同一 Go 字段名(如 user_id/user__id)
+// 均为生成期 fail——权限载体的字段歧义不允许存在。
+func scopeParamsOf(where string, guards []scopeGuard) ([]scopeParam, error) {
+	var out []scopeParam
+	types := map[string]string{}   // 参数名 → 类型
+	goNames := map[string]string{} // Go 字段名 → 参数名
+	for _, g := range guards {
+		for _, a := range g.Args {
+			if a.Literal != "" {
+				continue
+			}
+			if prev, dup := types[a.Name]; dup {
+				if prev != a.Type {
+					return nil, fmt.Errorf("%s: @scope parameter %q declared with conflicting types %s and %s", where, a.Name, prev, a.Type)
+				}
+				continue
+			}
+			types[a.Name] = a.Type
+			gc := goName(a.Name)
+			if prev, dup := goNames[gc]; dup {
+				return nil, fmt.Errorf("%s: @scope parameters %q and %q fold to the same Go field %q", where, prev, a.Name, gc)
+			}
+			goNames[gc] = a.Name
+			out = append(out, scopeParam{Name: a.Name, GoConst: gc, GoType: scopeParamTypes[a.Type]})
+		}
+	}
+	return out, nil
 }

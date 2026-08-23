@@ -98,6 +98,24 @@ func (ns NullUserStatus) Value() (driver.Value, error) {
 	return string(ns.UserStatus), nil
 }
 
+// 客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted('customers', user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]
+type Customer struct {
+	// ID [@dynamic: exact @sortable @selectable]
+	ID int64 `db:"id" json:"id"`
+	// 客户名 [@dynamic: fuzzy @sortable @selectable]
+	Name string `db:"name" json:"name"`
+	// 金额（分） [@dynamic: range @sortable @selectable]
+	AmountCents int64 `db:"amount_cents" json:"amount_cents"`
+	// 归属用户ID [@hidden]
+	OwnerUserID string `db:"owner_user_id" json:"owner_user_id"`
+	// 归属部门ID [@hidden]
+	OwnerDeptID string `db:"owner_dept_id" json:"owner_dept_id"`
+	// 创建时间 [@dynamic: range @sortable @selectable]
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	// 删除时间 [@dynamic: is_null, not_null]
+	DeletedAt pgtype.Timestamptz `db:"deleted_at" json:"deleted_at"`
+}
+
 // 订单表 [@default_sort: created_at DESC @pk: id @page: 20/100]
 type Order struct {
 	ID int64 `db:"id" json:"id"`
@@ -111,6 +129,39 @@ type Order struct {
 	Status OrderStatus `db:"status" json:"status"`
 	// 创建时间 [@dynamic: range @sortable @selectable]
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+}
+
+// 项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]
+type Project struct {
+	// ID [@dynamic: exact @sortable @selectable]
+	ID int64 `db:"id" json:"id"`
+	// 项目名 [@dynamic: fuzzy @sortable @selectable]
+	Name string `db:"name" json:"name"`
+	// 租户ID [@hidden]
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	// 归属用户ID [@hidden]
+	OwnerUserID string `db:"owner_user_id" json:"owner_user_id"`
+	// 创建时间 [@dynamic: range @sortable @selectable]
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+}
+
+type SysDeptClosure struct {
+	AncestorID   string `db:"ancestor_id" json:"ancestor_id"`
+	DescendantID string `db:"descendant_id" json:"descendant_id"`
+}
+
+type SysResourceGrant struct {
+	Resource string `db:"resource" json:"resource"`
+	UserID   string `db:"user_id" json:"user_id"`
+	RecordID int64  `db:"record_id" json:"record_id"`
+}
+
+type SysUser struct {
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	OwnerDeptID string             `db:"owner_dept_id" json:"owner_dept_id"`
+	TenantID    string             `db:"tenant_id" json:"tenant_id"`
+	DeletedAt   pgtype.Timestamptz `db:"deleted_at" json:"deleted_at"`
 }
 
 // 用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]

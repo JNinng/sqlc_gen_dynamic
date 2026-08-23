@@ -170,7 +170,12 @@ func (tc *tableCode) validateSection() string {
 	spec := tc.spec
 	var b strings.Builder
 	fmt.Fprintf(&b, "// validate%sParams 校验 params 在当前 opts 下的合法性,List 与 Count 共用。\n", tc.res)
-	b.WriteString("// 禁用字段携带非零值、IsNull 与 NotNull 同时为真均显式报错,不做静默剔除。\n")
+	b.WriteString("// 禁用字段携带非零值、IsNull 与 NotNull 同时为真均显式报错,不做静默剔除")
+	if len(spec.Scope) > 0 {
+		b.WriteString(";\n// 声明 @scope 的资源缺省 Scope 时 fail-closed 报错。\n")
+	} else {
+		b.WriteString("。\n")
+	}
 	b.WriteString("//\n")
 	b.WriteString("// 参数:\n")
 	b.WriteString("//   - params: 待复核的查询参数。\n")
@@ -179,6 +184,11 @@ func (tc *tableCode) validateSection() string {
 	b.WriteString("// 返回值:\n")
 	b.WriteString("//   - error: 复核通过返回 nil,否则返回结构化错误。\n")
 	fmt.Fprintf(&b, "func validate%sParams(params List%sParams, cfg *dynq.QueryConfig) error {\n", tc.res, tc.res)
+	if len(spec.Scope) > 0 {
+		b.WriteString("\t// 数据权限 fail-closed:声明 @scope 的表缺省 Scope 时显式报错,\n")
+		b.WriteString("\t// 宁可拒绝服务也不静默退化为全量可见。\n")
+		b.WriteString("\tif params.Scope == nil {\n\t\treturn dynq.ErrScopeRequired()\n\t}\n")
+	}
 	for _, c := range spec.Columns {
 		exprs := paramRefExprs(&c)
 		if len(exprs) == 0 {
@@ -204,7 +214,12 @@ func (tc *tableCode) whereSection() string {
 	spec := tc.spec
 	var b strings.Builder
 	fmt.Fprintf(&b, "// build%sWhere 构建过滤 WHERE 条件,List 与 Count 共用,过滤结果一致。\n", tc.res)
-	b.WriteString("// 所有值均经占位符参数化,列名与操作符为白名单字面量。\n")
+	b.WriteString("// 所有值均经占位符参数化,列名与操作符为白名单字面量")
+	if len(spec.Scope) > 0 {
+		b.WriteString(";\n// 声明 @scope 的表头部注入数据权限谓词(守卫函数名同为生成期白名单字面量),\n// 与业务条件 AND 组合,total 与 items 的权限视图天然一致\n")
+	} else {
+		b.WriteString("。\n")
+	}
 	b.WriteString("//\n")
 	b.WriteString("// 参数:\n")
 	b.WriteString("//   - params: 已通过 validate 形态复核的查询参数。\n")
@@ -213,6 +228,25 @@ func (tc *tableCode) whereSection() string {
 	b.WriteString("//   - []sq.Sqlizer: 按 AND 语义组合的过滤条件列表。\n")
 	fmt.Fprintf(&b, "func build%sWhere(params List%sParams) []sq.Sqlizer {\n", tc.res, tc.res)
 	b.WriteString("\tvar conds []sq.Sqlizer\n")
+	if len(spec.Scope) > 0 {
+		b.WriteString("\t// 数据权限谓词(@scope):多守卫 OR 组合,与业务条件 AND;列名/操作符/\n")
+		b.WriteString("\t// 守卫函数名/字面量参数为生成期白名单字面量,标识符参数经占位符参数化;\n")
+		b.WriteString("\t// IN-子查询与不相关标量函数在单条语句内只求值一次;params.Scope 非 nil\n")
+		b.WriteString("\t// 已由 validate 保证。\n")
+		exprs := make([]string, 0, len(spec.Scope))
+		for i := range spec.Scope {
+			exprs = append(exprs, tc.scopeGuardExpr(&spec.Scope[i]))
+		}
+		if len(exprs) == 1 {
+			fmt.Fprintf(&b, "\tconds = append(conds, %s)\n", exprs[0])
+		} else {
+			b.WriteString("\tconds = append(conds, sq.Or{\n")
+			for _, e := range exprs {
+				fmt.Fprintf(&b, "\t\t%s,\n", e)
+			}
+			b.WriteString("\t})\n")
+		}
+	}
 	for _, c := range spec.Columns {
 		for _, op := range orderedOps(c.Ops) {
 			for _, line := range tc.whereCaseLines(&c, op) {
@@ -294,4 +328,47 @@ func (tc *tableCode) whereCaseLines(c *ColumnSpec, op string) []string {
 			fmt.Sprintf("sq.Expr(%q, string(params.%sHas))", col+" @> ?"+cast, c.GoConst))}
 	}
 	return nil
+}
+
+// scopeOpSQL 是标量守卫操作符的 SQL 形态(in 走集合子查询特殊形态)。
+var scopeOpSQL = map[string]string{"eq": "=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+
+// scopeGuardExpr 生成单个守卫的 sq.Expr(...) 语句:标识符参数以占位符引用
+// params.Scope 字段(jsonb 参数显式 cast,不依赖参数类型推断),字面量参数
+// 经分词器校验后内联;in 为集合守卫(IN (SELECT * FROM fn(...))),
+// 其余为标量比较(col = fn(...) 等,NULL 列对比较恒为假,不可见,fail-closed 方向)。
+func (tc *tableCode) scopeGuardExpr(g *scopeGuard) string {
+	var callArgs, valExprs []string
+	for _, a := range g.Args {
+		if a.Literal != "" {
+			if a.Quoted {
+				callArgs = append(callArgs, "'"+a.Literal+"'")
+			} else {
+				callArgs = append(callArgs, a.Literal)
+			}
+			continue
+		}
+		var p *scopeParam
+		for i := range tc.spec.ScopeParams {
+			if tc.spec.ScopeParams[i].Name == a.Name {
+				p = &tc.spec.ScopeParams[i]
+				break
+			}
+		}
+		placeholder := "?"
+		if p.GoType == "json.RawMessage" {
+			placeholder = "?::jsonb"
+		}
+		callArgs = append(callArgs, placeholder)
+		valExprs = append(valExprs, "params.Scope."+p.GoConst)
+	}
+	call := g.Fn + "(" + strings.Join(callArgs, ", ") + ")"
+	frag := g.Column + " " + scopeOpSQL[g.Op] + " " + call
+	if g.Op == "in" {
+		frag = g.Column + " IN (SELECT * FROM " + call + ")"
+	}
+	if len(valExprs) == 0 {
+		return fmt.Sprintf("sq.Expr(%q)", frag)
+	}
+	return fmt.Sprintf("sq.Expr(%q, %s)", frag, strings.Join(valExprs, ", "))
 }

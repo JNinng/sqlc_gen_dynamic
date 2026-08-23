@@ -1,6 +1,7 @@
 // main 是 example 工程的动态查询演示入口:启动即连接本地 PostgreSQL,
 // 重建独立测试库 → 应用 schema.sql → 种子数据 → 跑一组动态 List 查询演示
-// (过滤 / 冲突拒绝 / 分页双模式 / 游标 / 窄投影 / opts 禁用 / schema / 跨表游标互斥)。
+// (过滤 / 冲突拒绝 / 分页双模式 / 游标 / 窄投影 / opts 禁用 / schema /
+// 跨表游标互斥 / @scope 行级数据权限)。
 //
 // 运行:go run ./example/db
 // 连接:默认 postgres://postgresql:root@localhost:5432/postgres(管理库),
@@ -27,9 +28,10 @@ const (
 	testDBName      = "sqlc_gen_dynamic_test"
 )
 
-// 种子数据(users 12 行:覆盖 NULL 组、NaN/±Inf、模糊转义、跨 org)。
+// 种子数据(users 12 行:覆盖 NULL 组、NaN/±Inf、模糊转义、跨 org;
+// 另含 @scope 演示数据:部门闭包 / 员工 / customer 归属)。
 const seedSQL = `
-TRUNCATE users, orders RESTART IDENTITY CASCADE;
+TRUNCATE users, orders, customers, projects, sys_user, sys_dept_closure, sys_resource_grant RESTART IDENTITY CASCADE;
 INSERT INTO users (name, email, password, status, role, age, score, balance, birth_date, org_id, tags, meta, created_at, updated_at, deleted_at) VALUES
 ('Alice',    'alice@x.com',  'pw', 'active',   'admin', 30, 90.5,  100.25, '1996-03-01', '0f14d0ab-9605-4a62-a9e4-5ed26688389b', ARRAY[1,2], '{"a":1,"b":{"c":2}}', '2026-01-01 10:00:00+00', '2026-02-01 08:00:00+00', NULL),
 ('Bob',      'bob@x.com',    'pw', 'banned',   NULL,    NULL, NULL, NULL,   NULL,         NULL,                                   NULL,      NULL,                 '2026-01-02 10:00:00+00', NULL,                     '2026-03-01 00:00:00+00'),
@@ -47,6 +49,31 @@ INSERT INTO orders (order_no, user_id, amount_cents, status, created_at) VALUES
 ('A-1', (SELECT id FROM users WHERE name='Alice'), 1000, 'paid',    '2026-02-01 10:00:00+00'),
 ('A-2', (SELECT id FROM users WHERE name='Alice'), 2500, 'pending', '2026-02-02 10:00:00+00'),
 ('C-1', (SELECT id FROM users WHERE name='Carol'),  500, 'shipped', '2026-02-03 10:00:00+00');
+
+-- @scope 演示数据:组织架构 d_root → {d_eng, d_sales}(闭包含自身配对);
+-- 租户 t_acme / t_globe;customers 六行 + projects 三行 + 一条显式共享授权。
+INSERT INTO sys_dept_closure (ancestor_id, descendant_id) VALUES
+('d_root', 'd_root'), ('d_root', 'd_eng'), ('d_root', 'd_sales'),
+('d_eng',  'd_eng'),  ('d_sales', 'd_sales');
+INSERT INTO sys_user (id, name, owner_dept_id, tenant_id) VALUES
+('u1', 'Alice(工程部)', 'd_eng',  't_acme'),
+('u2', 'Bob(工程部)',   'd_eng',  't_acme'),
+('u3', 'Carol(销售部)', 'd_sales', 't_globe'),
+('u4', 'Diana(集团)',   'd_root', 't_acme');
+INSERT INTO customers (name, amount_cents, owner_user_id, owner_dept_id, created_at) VALUES
+('Acme建站',     12000, 'u1', 'd_eng',   '2026-03-01 10:00:00+00'),
+('Bob物流系统',  30000, 'u2', 'd_eng',   '2026-03-02 10:00:00+00'),
+('Bob运维合同',   8000, 'u2', 'd_eng',   '2026-03-03 10:00:00+00'),
+('Carol营销季报', 5000, 'u3', 'd_sales', '2026-03-04 10:00:00+00'),
+('外部门协作单',  2000, 'u9', 'd_eng',   '2026-03-05 10:00:00+00'),
+('集团战略客户', 99000, 'u4', 'd_root',  '2026-03-06 10:00:00+00');
+-- Acme建站 显式共享给 Diana:守卫 fn_permitted('customers', user_id) 消费。
+INSERT INTO sys_resource_grant (resource, user_id, record_id) VALUES
+('customers', 'u4', (SELECT id FROM customers WHERE name = 'Acme建站'));
+INSERT INTO projects (name, tenant_id, owner_user_id, created_at) VALUES
+('Portal重构',    't_acme',  'u1', '2026-04-01 10:00:00+00'),
+('移动端v2',      't_acme',  'u2', '2026-04-02 10:00:00+00'),
+('Globe年度审计', 't_globe', 'u3', '2026-04-03 10:00:00+00');
 `
 
 func main() {
@@ -89,6 +116,8 @@ func run() error {
 	demoSchema()
 	fmt.Println("== ⑧ 跨表游标互斥(users 游标用于 orders → 指纹不符) ==")
 	demoCrossTable(ctx, pool)
+	fmt.Println("== ⑨ @scope 行级数据权限(多守卫 OR/eq/字面量 + fail-closed) ==")
+	demoScope(ctx, pool)
 
 	fmt.Println("\n全部演示完成 ✔")
 	return nil
@@ -360,6 +389,100 @@ func demoCrossTable(ctx context.Context, pool *pgxpool.Pool) {
 	}
 	e := dynq.AsError(err)
 	fmt.Printf("   %s (Kind=%s)\n", e.Reason, e.Kind)
+	fmt.Println()
+}
+
+// demoScope 演示 @scope 行级数据权限:守卫函数只写一次,多守卫 OR 组合
+// (归属用户 / 归属部门 / 显式共享字面量参数),scopes int[] 承载多角色并集;
+// projects 演示 eq 标量守卫(租户隔离);缺省 Scope 时 fail-closed 报错。
+func demoScope(ctx context.Context, pool *pgxpool.Pool) {
+	type view struct {
+		label  string
+		userID string
+		scopes []int64
+	}
+	views := []view{
+		{"Alice(u1) scopes=[1] 仅本人", "u1", []int64{1}},
+		{"Diana(u4) scopes=[2] 本部门", "u4", []int64{2}},
+		{"Diana(u4) scopes=[1,7] 多角色并集(部门主管+全局审计)", "u4", []int64{1, 7}},
+		{"Diana(u4) scopes=[3] 本部门及子部门", "u4", []int64{3}},
+	}
+	for _, v := range views {
+		// middleware 语义:认证解析后 WithScope 一次,handler 一行取出注入;
+		// Scope 类型按资源生成(CustomersScope),字段与守卫声明参数一一对应。
+		authed := dynq.WithScope(ctx, &gen.CustomersScope{UserID: v.userID, Scopes: v.scopes})
+		p, err := gen.ParseCustomersQuery(&dynq.Query{})
+		if err != nil {
+			fmt.Println("   error:", err)
+			return
+		}
+		p.Scope = dynq.ScopeFromContext[gen.CustomersScope](authed)
+		total, err := gen.CountCustomers(authed, pool, p)
+		if err != nil {
+			fmt.Println("   error:", err)
+			return
+		}
+		res, err := gen.ListCustomers(authed, pool, p)
+		if err != nil {
+			fmt.Println("   error:", err)
+			return
+		}
+		names := make([]string, 0, len(res.Items))
+		for _, c := range res.Items {
+			names = append(names, c.Name)
+		}
+		fmt.Printf("   %s → total=%d items=%v\n", v.label, total, names)
+	}
+
+	// 业务条件与权限正交叠加:scope=3 全集内再按 name 过滤。
+	authed := dynq.WithScope(ctx, &gen.CustomersScope{UserID: "u4", Scopes: []int64{3}})
+	p, err := gen.ParseCustomersQuery(&dynq.Query{
+		Where: []dynq.Condition{{Field: "name", Op: "contains", Value: "Bob"}},
+	})
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
+	p.Scope = dynq.ScopeFromContext[gen.CustomersScope](authed)
+	res, err := gen.ListCustomers(authed, pool, p)
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
+	fmt.Printf("   scopes=[3] + name contains Bob → %d 行(权限视图内收窄)\n", len(res.Items))
+
+	// eq 标量守卫:projects 只看本租户(Diana ∈ t_acme,不见 t_globe 项目)。
+	authedProj := dynq.WithScope(ctx, &gen.ProjectsScope{UserID: "u4"})
+	pp, err := gen.ParseProjectsQuery(&dynq.Query{})
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
+	pp.Scope = dynq.ScopeFromContext[gen.ProjectsScope](authedProj)
+	projTotal, err := gen.CountProjects(authedProj, pool, pp)
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
+	projRes, err := gen.ListProjects(authedProj, pool, pp)
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
+	projNames := make([]string, 0, len(projRes.Items))
+	for _, pr := range projRes.Items {
+		projNames = append(projNames, pr.Name)
+	}
+	fmt.Printf("   Diana projects(eq 租户守卫) → total=%d items=%v\n", projTotal, projNames)
+
+	// fail-closed:声明 @scope 的表未注入 Scope → 显式报错,不静默全量。
+	_, err = gen.ListCustomers(ctx, pool, gen.ListCustomersParams{})
+	if err == nil {
+		fmt.Println("   !! 缺省 Scope 未被拒绝(不应发生)")
+		return
+	}
+	e := dynq.AsError(err)
+	fmt.Printf("   缺省 Scope → %s (Kind=%s)\n", e.Reason, e.Kind)
 	fmt.Println()
 }
 

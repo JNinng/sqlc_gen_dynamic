@@ -133,8 +133,17 @@ func (tc *tableCode) importsSection() string {
 			needTime = true
 		}
 	}
+	needJSON := false
+	for _, p := range tc.spec.ScopeParams {
+		if p.GoType == "json.RawMessage" {
+			needJSON = true
+		}
+	}
 	var std, rest []string
 	std = append(std, `"context"`)
+	if needJSON {
+		std = append(std, `"encoding/json"`)
+	}
 	if needTime {
 		std = append(std, `"time"`)
 	}
@@ -300,6 +309,16 @@ var opSuffix = map[string]string{
 func (tc *tableCode) paramsSection() string {
 	spec := tc.spec
 	var b strings.Builder
+	if len(spec.Scope) > 0 {
+		fmt.Fprintf(&b, "// %sScope 是 @scope 守卫函数的参数载体:字段为全部守卫声明的标识符参数并集\n", tc.res)
+		b.WriteString("// (字面量参数已内联进谓词,不占用字段)。协议门结构性无法设置该字段;\n")
+		b.WriteString("// 缺省时 List/Count fail-closed 报错(Kind=scope),不静默退化为全量可见。\n")
+		fmt.Fprintf(&b, "type %sScope struct {\n", tc.res)
+		for _, p := range spec.ScopeParams {
+			fmt.Fprintf(&b, "\t%s %s\n", p.GoConst, p.GoType)
+		}
+		b.WriteString("}\n\n")
+	}
 	fmt.Fprintf(&b, "// List%sParams 是 typed 门的查询参数,供内部调用方直接构造(编译期安全)。\n", tc.res)
 	b.WriteString("// 每个字段以单值承载一个操作符,因此无法表达协议门可拒绝的条件冲突——\n")
 	b.WriteString("// 冲突检测仅在协议门执行。\n")
@@ -344,6 +363,13 @@ func (tc *tableCode) paramsSection() string {
 				emit(fmt.Sprintf("%sHas", c.GoConst), c.GoType)
 			}
 		}
+	}
+	if len(spec.Scope) > 0 {
+		b.WriteString("\t// Scope 是数据权限上下文(表级 @scope 声明的资源必填,fail-closed):\n")
+		b.WriteString("\t// 与业务槽位\"零值=条件不参与\"不同,Scope 为 nil 时 List/Count 直接报错。\n")
+		b.WriteString("\t// 协议门(Parse)无法设置该字段——客户端请求不构成注入通道;\n")
+		fmt.Fprintf(&b, "\t// 注入方式:params.Scope = dynq.ScopeFromContext[%sScope](ctx) 或直接构造。\n", tc.res)
+		fmt.Fprintf(&b, "\tScope *%sScope\n", tc.res)
 	}
 	b.WriteString("\t// OrderBy 指定排序(逻辑字段名与方向);为 nil 时回落表级 @default_sort。\n")
 	b.WriteString("\tOrderBy []dynq.OrderBy\n")

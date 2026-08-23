@@ -272,6 +272,105 @@ func TestGenerateDSLFailures(t *testing.T) {
 			},
 			wantErr: "must not contain a query string",
 		},
+		// ---- @scope ----
+		{
+			name: "scope_missing_guards",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: @pk: id]")
+			},
+			wantErr: "@scope wants",
+		},
+		{
+			name: "scope_unknown_op",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name like fn_x(user_id:varchar) @pk: id]")
+			},
+			wantErr: `@scope op "like" not allowed`,
+		},
+		{
+			name: "scope_op_not_in_allowlist",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name not_in fn_x(user_id:varchar) @pk: id]")
+			},
+			wantErr: "want one of: eq, gt, gte, in, lt, lte",
+		},
+		{
+			name: "scope_missing_parens",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name eq fn_x @pk: id]")
+			},
+			wantErr: "@scope wants '('",
+		},
+		{
+			name: "scope_unclosed_paren",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name in fn_x(user_id:varchar @pk: id]")
+			},
+			wantErr: "missing ')'",
+		},
+		{
+			name: "scope_unknown_column",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: ghost in fn_x(user_id:varchar) @pk: id]")
+			},
+			wantErr: `@scope column "ghost" not found`,
+		},
+		{
+			name: "scope_column_guarded_twice",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name in fn_a(user_id:varchar) name eq fn_b(user_id:varchar) @pk: id]")
+			},
+			wantErr: "guarded twice",
+		},
+		{
+			name: "scope_bad_fn_name",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name in Fn-A(user_id:varchar) @pk: id]")
+			},
+			wantErr: "not a plain (optionally schema-qualified) lowercase identifier",
+		},
+		{
+			name: "scope_unknown_param_type",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name in fn_x(user_id:text) @pk: id]")
+			},
+			wantErr: `parameter type "text" not in vocabulary`,
+		},
+		{
+			name: "scope_param_type_conflict",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name in fn_a(uid:varchar) email in fn_b(uid:int) @pk: id]")
+			},
+			wantErr: "conflicting types",
+		},
+		{
+			name: "scope_param_go_name_fold",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name in fn_a(user_id:varchar) email in fn_b(user__id:int) @pk: id]")
+			},
+			wantErr: "fold to the same Go field",
+		},
+		{
+			name: "scope_arg_missing_type",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name in fn_x(user_id) @pk: id]")
+			},
+			wantErr: "':' after parameter name",
+		},
+		{
+			name: "scope_string_literal_with_quote",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@scope: name in fn_x('a''b') @pk: id]")
+			},
+			wantErr: "wants ',' or ')'",
+		},
+		{
+			name: "scope_not_allowed_on_column",
+			mutate: func(r *pb.GenerateRequest) {
+				setComment(r, "users", "name", "姓名 [@scope: x eq fn_y()]")
+			},
+			wantErr: "unknown directive @scope",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

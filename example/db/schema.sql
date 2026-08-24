@@ -69,6 +69,8 @@ CREATE TABLE sys_dept_closure (
 );
 
 -- 员工表:权限主体。owner_dept_id 是其所属部门,tenant_id 是租户归属。
+-- 启用 in_any 数组三态守卫:fn_perm_user_ids 返回 NULL(全租户)→ 放行全部、
+-- {}(无任何授权)→ 拒绝全部、非空 → id = ANY(...) 精确集合。
 CREATE TABLE sys_user (
     id            varchar(64) PRIMARY KEY,
     name          varchar(64) NOT NULL,
@@ -76,6 +78,10 @@ CREATE TABLE sys_user (
     tenant_id     varchar(64) NOT NULL,
     deleted_at    TIMESTAMPTZ
 );
+
+COMMENT ON COLUMN sys_user.id   IS 'ID [@dynamic: exact]';
+COMMENT ON COLUMN sys_user.name IS '姓名 [@dynamic: fuzzy]';
+COMMENT ON TABLE sys_user IS '员工表 [@scope: id in_any fn_perm_user_ids(user_id:varchar, scopes:int[]) @pk: id]';
 
 -- 显式共享授权:某资源的单条记录被显式共享给某用户(守卫函数消费)。
 CREATE TABLE sys_resource_grant (
@@ -153,6 +159,36 @@ CREATE OR REPLACE FUNCTION fn_tenant_id(p_user_id varchar(64))
 RETURNS varchar AS $$
     SELECT tenant_id FROM sys_user WHERE id = p_user_id;
 $$ LANGUAGE sql STABLE;
+
+-- fn_perm_user_ids 返回 p_user_id 在 p_scopes 下可见的用户 ID 数组(in_any
+-- 三态契约):7=ANY(p_scopes) → NULL(全租户,显式放行);无任何授权命中 →
+-- '{}'(拒绝全部);否则 → 可见 ID 数组(id = ANY(...) 精确匹配)。与集合版
+-- fn_accessible_user_ids 同源语义,以数组承载以区分 NULL 与空集。
+CREATE OR REPLACE FUNCTION fn_perm_user_ids(
+    p_user_id varchar(64),
+    p_scopes  int[]
+)
+RETURNS varchar[] AS $$
+DECLARE
+    v_dept_id varchar(64);
+    v_ids     varchar[];
+BEGIN
+    IF 7 = ANY(p_scopes) THEN
+        RETURN NULL;
+    END IF;
+    SELECT owner_dept_id INTO v_dept_id FROM sys_user WHERE id = p_user_id;
+    SELECT array_agg(u.id) INTO v_ids
+    FROM sys_user u
+    WHERE u.deleted_at IS NULL AND (
+        (u.id = p_user_id AND 1 = ANY(p_scopes))
+        OR (u.owner_dept_id = v_dept_id AND 2 = ANY(p_scopes))
+        OR (3 = ANY(p_scopes) AND u.owner_dept_id IN (
+            SELECT descendant_id FROM sys_dept_closure WHERE ancestor_id = v_dept_id
+        ))
+    );
+    RETURN COALESCE(v_ids, '{}');
+END;
+$$ LANGUAGE plpgsql STABLE;
 
 -- customers 表:三条守卫 OR 组合——归属用户集合 / 归属部门集合 / 显式共享;
 -- 守卫列 @hidden:归属列只参与权限注入,不暴露给前端过滤/投影。

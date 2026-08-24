@@ -19,8 +19,8 @@ make sqlc
 # 全量测试:dynq 单测 + 插件 golden 测试(无数据库依赖;example 包随测编译)
 make test
 
-# 动态查询演示:启动即重建测试库 → 应用 schema → 种子数据 → 跑 9 组查询演示
-# (过滤/冲突拒绝/offset 分页/游标翻页/窄投影/opts 禁用/schema/跨表游标互斥/@scope 行级数据权限)
+# 动态查询演示:启动即重建测试库 → 应用 schema → 种子数据 → 跑 10 组查询演示
+# (过滤/冲突拒绝/offset 分页/游标翻页/窄投影/opts 禁用/schema/跨表游标互斥/@scope 行级数据权限/in_any 数组三态)
 go run ./example/db
 
 # 生成后 git diff 锁 gen 目录,防 schema 漂移(CI 用固定版本 sqlc 执行)
@@ -70,7 +70,7 @@ sha256sum bin/sqlc_gen_dynamic.wasm
 | `@default_sort: <列> <ASC\|DESC>` | 表 | 缺省排序回落;目标列必须已声明 `@sortable` |
 | `@page: <默认>/<上限>` | 表 | 分页每页条数默认与上限(协议键 `pageSize`) |
 | `@pk: <列>` | 表 | 主键列(tiebreaker),所有被生成的表必填;**单独声明即纳入生成**(零 `@dynamic` 列的最小接入形态,仅 List/Count/分页骨架);指向可空列或 `@hidden` 列 → 生成期 fail |
-| `@scope: <列> <op> <函数>(<参数>,...) ...` | 表 | 行级数据权限:多守卫 OR 组合。op ∈ `in`(集合守卫)/`eq`/`gt`/`gte`/`lt`/`lte`(标量守卫);参数为标识符 `name:type`(类型词表 `varchar`/`int`→int64/`bool`/`varchar[]`/`int[]`/`jsonb`,值来自生成的 Scope 结构体)或字面量(`'字符串'`/整数,内联);目标列须存在、可与 `@hidden` 组合,一列一守卫;见下方[行级数据权限](#行级数据权限scope) |
+| `@scope: <列> <op> <函数>(<参数>,...) ...` | 表 | 行级数据权限:多守卫 OR 组合。op ∈ `in`(集合守卫)/`in_any`(数组三态守卫)/`eq`/`gt`/`gte`/`lt`/`lte`(标量守卫);参数为标识符 `name:type`(类型词表 `varchar`/`int`→int64/`bool`/`varchar[]`/`int[]`/`jsonb`,值来自生成的 Scope 结构体)或字面量(`'字符串'`/整数,内联);目标列须存在、可与 `@hidden` 组合,一列一守卫;见下方[行级数据权限](#行级数据权限scope) |
 
 预设展开:
 
@@ -103,9 +103,12 @@ sha256sum bin/sqlc_gen_dynamic.wasm
 COMMENT ON COLUMN users.name       IS '姓名 [@dynamic: fuzzy, exact @sortable @selectable]';
 COMMENT ON COLUMN users.password   IS '密码 [@hidden]';
 COMMENT ON COLUMN users.deleted_at IS '删除时间 [@dynamic: is_null, not_null]';
+
 COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]';
 
 COMMENT ON TABLE  customers        IS '客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted(''customers'', user_id:varchar) @pk: id]';
+
+COMMENT ON TABLE  sys_user         IS '员工表 [@scope: id in_any fn_perm_user_ids(user_id:varchar, scopes:int[]) @pk: id]';
 ```
 
 ## 查询入参契约(`POST /{resource}/list`)
@@ -249,7 +252,7 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
 
 ## 行级数据权限(@scope)
 
-表级指令 `@scope: <列> <op> <函数>(<参数>,...) ...` 为动态表声明行级数据权限:权限规则集中在 DB 守卫函数里只写一次(显式参数、可单独 `SELECT * FROM fn(...)` 测试、定义在 sqlc 可见的 schema 内随迁移版本化),业务代码零权限感知。example 的 `customers`(三条 OR 守卫:归属用户集合 / 归属部门集合 / 显式共享字面量参数)与 `projects`(eq 租户标量守卫)即完整演示。
+表级指令 `@scope: <列> <op> <函数>(<参数>,...) ...` 为动态表声明行级数据权限:权限规则集中在 DB 守卫函数里只写一次(显式参数、可单独 `SELECT * FROM fn(...)` 测试、定义在 sqlc 可见的 schema 内随迁移版本化),业务代码零权限感知。example 的 `customers`(三条 OR 守卫:归属用户集合 / 归属部门集合 / 显式共享字面量参数)、`projects`(eq 租户标量守卫)与 `sys_user`(in_any 数组三态守卫:NULL=全租户放行 / {}=拒绝 / 非空=ANY)即完整演示。
 
 ### 机制
 
@@ -258,13 +261,16 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
   | op | SQL 形态 | fn 返回 |
   |---|---|---|
   | `in` | `col IN (SELECT * FROM fn(...))` | 单列集合,类型与目标列一致 |
+  | `in_any` | `(fn(...) IS NULL OR col = ANY(fn(...)))` | 数组(类型与目标列一致);**三态契约**:fn 返回 `NULL` → 放行全部(如"全租户"),`{}` → 拒绝全部,非空 → ANY 精确匹配 |
   | `eq` | `col = fn(...)` | 标量;**NULL 列对比较恒为假(不可见,fail-closed 方向)** |
   | `gt`/`gte`/`lt`/`lte` | `col > fn(...)` 等(时间窗权限) | 标量 |
+
+  `in_any` 的 fn **必须返回数组而非集合返回函数**:集合形态下"空集"与"NULL 行"不可区分(`fn() IS NULL` 两者同为真),三态无法表达;数组形态 `NULL`(数组本身)与 `{}` 可区分。注意 `in_any` 的 NULL 是**显式放行**语义,与 `in` 的 fail-closed 方向相反——适用于函数以 NULL 表达"不限/全租户"的契约;守卫函数写错返回 NULL 会放开整表,需在函数侧保证 `NULL` 只由显式分支返回(example 的 `fn_perm_user_ids` 即此范式:scope 含 7 → `RETURN NULL`,无授权 → `RETURN '{}'`)。
 
   刻意排除 `neq`/`not_in`——`NOT IN` 撞上集合含 NULL 时恒空,是权限事故配方。
 - **参数**:标识符参数 `name:type`(类型词表 `varchar`→string、`int`→**int64**、`bool`、`varchar[]`→[]string、`int[]`→[]int64、`jsonb`→json.RawMessage,词表外类型生成期 fail;字段汇入该表的 `XxxScope` 结构体,多守卫同名参数去重合并、类型冲突 fail)或字面量参数(`'字符串'`/整数,校验后内联进 SQL);允许零参函数。
 - **守卫函数契约**:函数本体不在 sqlc catalog,不做存在性校验(与 `@api` endpoint 同一信任级别),由部署侧保证;函数名须为小写标识符(可带一层 schema 限定,会拼进 SQL 字面量故严格校验)。
-- **谓词注入**:`buildXxxWhere` 头部按声明内联生成守卫谓词(零反射,编译期类型检查),与业务条件 AND;IN-子查询与不相关标量函数在单条语句内只求值一次;List 与 Count 共用 → **total 与 items 的权限视图天然一致**。
+- **谓词注入**:`buildXxxWhere` 头部按声明内联生成守卫谓词(零反射,编译期类型检查),与业务条件 AND;IN-子查询与不相关标量函数在单条语句内只求值一次(`in_any` 谓词中 fn 出现两次——IS NULL 判别与 ANY 匹配,STABLE 函数两次调用结果一致);List 与 Count 共用 → **total 与 items 的权限视图天然一致**。
 - **fail-closed**:声明 `@scope` 的表,`params.Scope` 为 nil 时 List/Count 直接报错(`Kind=scope`),宁可拒绝服务也不静默退化为全量可见。
 - **协议门结构性隔离**:客户端 JSON 不存在设置 Scope 的通道,权限值只能来自服务端注入。
 - **硬边界**:一列一守卫(重复声明 fail);参数不做行相关(不允许引用本行其他列——相关子查询退化为逐行求值);需要 AND 复合逻辑(租户 AND 归属)时写进函数内部或交给 RLS 层,DSL 保持扁平 OR。

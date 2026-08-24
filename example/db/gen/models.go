@@ -168,8 +168,11 @@ type SysResourceGrant struct {
 	RecordID int64  `db:"record_id" json:"record_id"`
 }
 
+// 员工表 [@scope: id in_any fn_perm_user_ids(user_id:varchar, scopes:int[]) @pk: id]
 type SysUser struct {
-	ID          string             `db:"id" json:"id"`
+	// ID [@dynamic: exact]
+	ID string `db:"id" json:"id"`
+	// 姓名 [@dynamic: fuzzy]
 	Name        string             `db:"name" json:"name"`
 	OwnerDeptID string             `db:"owner_dept_id" json:"owner_dept_id"`
 	TenantID    string             `db:"tenant_id" json:"tenant_id"`

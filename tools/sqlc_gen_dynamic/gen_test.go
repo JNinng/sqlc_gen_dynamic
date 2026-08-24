@@ -114,6 +114,28 @@ func TestGeneratePkOnlyTable(t *testing.T) {
 	}
 }
 
+// TestGenerateScopeInAny 覆盖数组三态守卫(NULL=放行 / {}=拒绝 / 非空=ANY):
+// frag 须自带外层括号(顶层 OR 不裸露于业务条件的 AND),且 fn 调用出现
+// 两次 → 占位参数双份。
+func TestGenerateScopeInAny(t *testing.T) {
+	req := loadGoldenRequest(t)
+	setTableComment(req, "users", "用户表 [@scope: id in_any fn_perm_user_ids(user_id:varchar, scopes:int[]) @pk: id]")
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for _, f := range resp.Files {
+		if f.Name != "users_dynamic_gen.go" {
+			continue
+		}
+		src := string(f.Contents)
+		want := `sq.Expr("(fn_perm_user_ids(?, ?) IS NULL OR id = ANY(fn_perm_user_ids(?, ?)))", params.Scope.UserID, params.Scope.Scopes, params.Scope.UserID, params.Scope.Scopes)`
+		if !strings.Contains(src, want) {
+			t.Errorf("in_any guard SQL mismatch.\n want fragment: %s\n absent from generated source", want)
+		}
+	}
+}
+
 func TestGenerateTablesFilter(t *testing.T) {
 	req := loadGoldenRequest(t)
 	req.PluginOptions = []byte(`{
@@ -319,7 +341,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 			mutate: func(r *pb.GenerateRequest) {
 				setTableComment(r, "users", "用户表 [@scope: name not_in fn_x(user_id:varchar) @pk: id]")
 			},
-			wantErr: "want one of: eq, gt, gte, in, lt, lte",
+			wantErr: "want one of: eq, gt, gte, in, in_any, lt, lte",
 		},
 		{
 			name: "scope_missing_parens",

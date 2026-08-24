@@ -260,7 +260,7 @@ func parseDefaultSortDirective(where string, t dslTag) (column string, desc bool
 // scopeGuard 是 @scope 声明的一项守卫:目标列、谓词操作符、守卫函数与实参列表。
 type scopeGuard struct {
 	Column string
-	Op     string // in | eq | gt | gte | lt | lte
+	Op     string // in | in_any | eq | gt | gte | lt | lte
 	Fn     string
 	Args   []scopeArg
 }
@@ -275,8 +275,11 @@ type scopeArg struct {
 }
 
 // scopeOps 是守卫谓词操作符的封闭集合:SQL 语义与业务操作符表同源。
+// in_any 是数组三态守卫(fn 返回数组):NULL=放行全部、{}=拒绝全部、
+// 非空=ANY 匹配;与 in(集合返回函数,NULL 行=fail-closed 拒绝)方向相反,
+// 供"NULL 表示全租户"一类的显式放行契约使用。
 // 刻意排除 neq/not_in——NOT IN 撞上集合含 NULL 时恒空,是权限事故配方。
-var scopeOps = map[string]bool{"in": true, "eq": true, "gt": true, "gte": true, "lt": true, "lte": true}
+var scopeOps = map[string]bool{"in": true, "in_any": true, "eq": true, "gt": true, "gte": true, "lt": true, "lte": true}
 
 // scopeParamTypes 是标识符参数的类型词表(DSL 标记 → Go 类型),封闭集合:
 // 词表外类型 → 生成期 fail。int 对应 int64(PG 整数全量承载)。
@@ -454,7 +457,7 @@ func parseScopeDirective(where string, t dslTag) ([]scopeGuard, error) {
 			return nil, err
 		}
 		if !scopeOps[opTok.text] {
-			return nil, fail("@scope op %q not allowed (want one of: eq, gt, gte, in, lt, lte)", opTok.text)
+			return nil, fail("@scope op %q not allowed (want one of: eq, gt, gte, in, in_any, lt, lte)", opTok.text)
 		}
 		fnTok, err := expectKind(tokIdent, "a guard function name")
 		if err != nil {

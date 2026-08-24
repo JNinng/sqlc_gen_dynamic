@@ -1,7 +1,7 @@
 // main 是 example 工程的动态查询演示入口:启动即连接本地 PostgreSQL,
 // 重建独立测试库 → 应用 schema.sql → 种子数据 → 跑一组动态 List 查询演示
 // (过滤 / 冲突拒绝 / 分页双模式 / 游标 / 窄投影 / opts 禁用 / schema /
-// 跨表游标互斥 / @scope 行级数据权限)。
+// 跨表游标互斥 / @scope 行级数据权限 / @scope in_any 数组三态)。
 //
 // 运行:go run ./example/db
 // 连接:默认 postgres://postgresql:root@localhost:5432/postgres(管理库),
@@ -118,6 +118,8 @@ func run() error {
 	demoCrossTable(ctx, pool)
 	fmt.Println("== ⑨ @scope 行级数据权限(多守卫 OR/eq/字面量 + fail-closed) ==")
 	demoScope(ctx, pool)
+	fmt.Println("== ⑩ @scope in_any 数组三态(NULL=放行 / {}=拒绝 / 非空=ANY) ==")
+	demoScopeInAny(ctx, pool)
 
 	fmt.Println("\n全部演示完成 ✔")
 	return nil
@@ -483,6 +485,70 @@ func demoScope(ctx context.Context, pool *pgxpool.Pool) {
 	}
 	e := dynq.AsError(err)
 	fmt.Printf("   缺省 Scope → %s (Kind=%s)\n", e.Reason, e.Kind)
+	fmt.Println()
+}
+
+// demoScopeInAny 演示 @scope in_any 数组三态守卫:fn_perm_user_ids 返回
+// NULL(全租户)→ 放行全部;{}(无授权)→ 拒绝全部;非空 → id = ANY(...)
+// 精确集合。NULL 放行下业务条件照常生效(守卫 frag 自带括号,AND 不被绕过)。
+func demoScopeInAny(ctx context.Context, pool *pgxpool.Pool) {
+	type view struct {
+		label  string
+		userID string
+		scopes []int64
+	}
+	views := []view{
+		{"Diana(u4) scopes=[1,7] 含 7 → fn 返回 NULL → 放行全部", "u4", []int64{1, 7}},
+		{"Alice(u1) scopes=[1] 仅本人 → fn 返回 [u1]", "u1", []int64{1}},
+		{"Bob(u2) scopes=[3] 本部门及子部门 → fn 返回 [u1,u2]", "u2", []int64{3}},
+		{"Carol(u3) scopes=[9] 无任何授权 → fn 返回 {} → 拒绝全部", "u3", []int64{9}},
+	}
+	for _, v := range views {
+		authed := dynq.WithScope(ctx, &gen.SysUserScope{UserID: v.userID, Scopes: v.scopes})
+		p, err := gen.ParseSysUserQuery(&dynq.Query{})
+		if err != nil {
+			fmt.Println("   error:", err)
+			return
+		}
+		p.Scope = dynq.ScopeFromContext[gen.SysUserScope](authed)
+		total, err := gen.CountSysUser(authed, pool, p)
+		if err != nil {
+			fmt.Println("   error:", err)
+			return
+		}
+		res, err := gen.ListSysUser(authed, pool, p)
+		if err != nil {
+			fmt.Println("   error:", err)
+			return
+		}
+		names := make([]string, 0, len(res.Items))
+		for _, u := range res.Items {
+			names = append(names, u.Name)
+		}
+		fmt.Printf("   %s → total=%d items=%v\n", v.label, total, names)
+	}
+
+	// NULL 放行不绕过业务条件:全租户视图内按 name contains 收窄
+	//(若守卫括号缺失,顶层 OR 会吞掉 AND,这里将返回全量 4 行)。
+	authed := dynq.WithScope(ctx, &gen.SysUserScope{UserID: "u4", Scopes: []int64{1, 7}})
+	p, err := gen.ParseSysUserQuery(&dynq.Query{
+		Where: []dynq.Condition{{Field: "name", Op: "contains", Value: "工程"}},
+	})
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
+	p.Scope = dynq.ScopeFromContext[gen.SysUserScope](authed)
+	res, err := gen.ListSysUser(authed, pool, p)
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
+	names := make([]string, 0, len(res.Items))
+	for _, u := range res.Items {
+		names = append(names, u.Name)
+	}
+	fmt.Printf("   scopes=[1,7] 放行 + name contains 工程 → %d 行 %v(业务条件仍生效)\n", len(res.Items), names)
 	fmt.Println()
 }
 

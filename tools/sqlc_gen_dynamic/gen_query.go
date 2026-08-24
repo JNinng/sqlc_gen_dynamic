@@ -347,7 +347,9 @@ var scopeOpSQL = map[string]string{"eq": "=", "gt": ">", "gte": ">=", "lt": "<",
 // scopeGuardExpr 生成单个守卫的 sq.Expr(...) 语句:标识符参数以占位符引用
 // params.Scope 字段(jsonb 参数显式 cast,不依赖参数类型推断),字面量参数
 // 经分词器校验后内联;in 为集合守卫(IN (SELECT * FROM fn(...))),
-// 其余为标量比较(col = fn(...) 等,NULL 列对比较恒为假,不可见,fail-closed 方向)。
+// in_any 为数组三态守卫((fn(...) IS NULL OR col = ANY(fn(...))):NULL=放行、
+// {}=拒绝、非空=ANY 匹配),其余为标量比较(col = fn(...) 等,NULL 列对
+// 比较恒为假,不可见,fail-closed 方向)。
 func (tc *tableCode) scopeGuardExpr(g *scopeGuard) string {
 	var callArgs, valExprs []string
 	for _, a := range g.Args {
@@ -377,6 +379,13 @@ func (tc *tableCode) scopeGuardExpr(g *scopeGuard) string {
 	frag := g.Column + " " + scopeOpSQL[g.Op] + " " + call
 	if g.Op == "in" {
 		frag = g.Column + " IN (SELECT * FROM " + call + ")"
+	}
+	if g.Op == "in_any" {
+		// frag 自带外层括号:sq.Expr 不参与 squirrel 的自动加括号,顶层 OR
+		// 若裸露会与业务条件的 AND 发生优先级错乱(NULL 放行将绕过业务过滤)。
+		// fn 调用出现两次 → 占位参数相应双份。
+		frag = "(" + call + " IS NULL OR " + g.Column + " = ANY(" + call + "))"
+		valExprs = append(valExprs, valExprs...)
 	}
 	if len(valExprs) == 0 {
 		return fmt.Sprintf("sq.Expr(%q)", frag)

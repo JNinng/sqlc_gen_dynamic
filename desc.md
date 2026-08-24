@@ -244,15 +244,19 @@ where 值控件的 options 经 `GET {endpoint}` 拉取，而非静态 `enum`。�
 **`@scope`（行级数据权限）**：表级微型语法 `<列> <op> <函数>(<参数,...>)`，多守卫恒为 OR 组合。权限规则集中在 DB
 守卫函数里只写一次，函数定义在 sqlc 可见的 schema 内随迁移版本化。要点：
 
-- **op 封闭集合** `in|eq|gt|gte|lt|lte`：`in` 为集合守卫（`col IN (SELECT * FROM fn(...))`，fn 单列返回、类型与目标列
-  一致）；其余为标量守卫（`col = fn(...)` 等，NULL 列对比较恒为假——不可见，fail-closed 方向）。刻意排除
-  `neq`/`not_in`（`NOT IN` 撞集合含 NULL 恒空，权限事故配方）。
+- **op 封闭集合** `in|in_any|eq|gt|gte|lt|lte`：`in` 为集合守卫（`col IN (SELECT * FROM fn(...))`，fn 单列返回、类型与目标列
+  一致）；`in_any` 为数组三态守卫（`(fn(...) IS NULL OR col = ANY(fn(...)))`，fn 返回**数组**而非集合——集合形态下"空集"与
+  "NULL 行"不可区分（`fn() IS NULL` 二者同为真），三态无法表达；数组形态 NULL（数组本身）与 `{}` 可区分：NULL=放行全部、
+  `{}`=拒绝全部、非空=ANY 精确匹配，服务于"NULL 表示全租户"一类显式放行契约，注意其 NULL 放行方向与 `in` 的 fail-closed
+  相反，守卫函数须保证 NULL 只由显式分支返回）；其余为标量守卫（`col = fn(...)` 等，NULL 列对比较恒为假——不可见，fail-closed
+  方向）。刻意排除 `neq`/`not_in`（`NOT IN` 撞集合含 NULL 恒空，权限事故配方）。
 - **参数**：标识符参数 `name:type`（类型词表 varchar→string、int→int64、bool、varchar[]→[]string、int[]→[]int64、
   jsonb→json.RawMessage，词表外生成期 fail）或字面量参数（`'字符串'`/整数，经分词器校验后内联）；允许零参。
   函数名须为小写标识符（可带一层 schema 限定）——拼进 SQL 字面量故严格校验，杜绝注入面。
 - **生成形态**：标识符参数并集生成 per-table `XxxScope` 结构体（同名参数类型冲突、不同参数名折叠同一 Go 字段名
   均生成期 fail）；`buildXxxWhere` 头部按声明内联穷举守卫谓词（零反射、编译期类型检查），与业务条件 AND，
-  List/Count 共用 → total 与 items 权限视图天然一致；IN-子查询与不相关标量函数单语句内只求值一次。
+  List/Count 共用 → total 与 items 权限视图天然一致；IN-子查询与不相关标量函数单语句内只求值一次
+  （`in_any` 谓词 fn 出现两次——IS NULL 判别与 ANY 匹配，STABLE 下结果一致，占位参数随调用双份）。
 - **注入与 fail-closed**：`params.Scope` 为保留字段（`*XxxScope`），协议门结构性无法设置；服务端经
   `dynq.WithScope(ctx, &XxxScope{...})` + `dynq.ScopeFromContext[XxxScope](ctx)` 注入；缺省 Scope 时
   List/Count fail-closed 报错（`Kind=scope`），不静默退化为全量可见。

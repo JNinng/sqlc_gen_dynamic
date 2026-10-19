@@ -417,7 +417,7 @@ total, err := gen.CountCustomers(ctx, db, params) // 同一 params → 同一权
 
 ```text
 tools/sqlc_gen_dynamic/     # 插件本体(options / DSL 解析 / Catalog 遍历 / 生成模板)
-dynq/                     # 运行时库(手写,信封/收敛/游标/排序/QueryOption/schema)
-example/db/                 # 示例工程(schema.sql + queries.sql + sqlc.yaml + gen/)
+dynq/                       # 运行时库(手写,信封/收敛/游标/排序/QueryOption/schema)
+example/db/                 # 示例工程(schema.sql + queries.sql + sqlc.yaml + main.go + gen/)
 bin/                        # 构建产物(已 gitignore)
 ```

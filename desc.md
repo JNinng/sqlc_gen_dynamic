@@ -4,7 +4,7 @@
 |------|--------------------------------------------------|
 | 状态   | 已实施                                                |
 | 日期   | 2026-08-22                                       |
-| 关联产物 | 插件 `sqlc_gen_dynamic`、运行时库 `dynq`、生成物包 `dynamic` |
+| 关联产物 | 插件 `sqlc_gen_dynamic`、运行时库 `dynq`、生成物(包名经 options `package` 配置,example 为 `gen`) |
 
 ---
 
@@ -73,7 +73,7 @@ List 是 sqlc 社区常年 Top 需求，短期无法指望官方支持。
 HTTP 入口                                      内部调用方（定时任务、服务间）
   │                                                 │
   ▼                                                 ▼
-dynq.DecodeStrict ──▶ ParseUsersQuery(q, opts...)   ListUsersParams{...}（直接构造）
+dynq.DecodeQuery ──▶ ParseUsersQuery(q, opts...)   ListUsersParams{...}（直接构造）
                           │                              │
                           └──▶ ListUsersParams ──────────┤  opts 在此防御性复核
                                    │                      │
@@ -130,7 +130,7 @@ dynq.DecodeStrict ──▶ ParseUsersQuery(q, opts...)   ListUsersParams{...}�
 
 ### 4.2 双构建模式
 
-同一份源码，build tag 拆分入口，协议相同（stdin 收 `CodeGenRequest` protobuf，stdout 回 `CodeGenResponse`）：
+同一份源码，入口由 plugin-sdk-go 的 `codegen.Run` 承载双构建模式，协议相同（stdin 收 `GenerateRequest` protobuf，stdout 回 `GenerateResponse`）：
 
 - **process 模式**（开发期）：`go build` 出本地二进制挂到 sqlc.yaml，改动即生效，可 dlv 调试。
 - **wasm 模式**（发布期）：编译为 wasm，sqlc.yaml 以 `url + sha256` 锁定，保证跨机器一致性。
@@ -162,7 +162,7 @@ diff。CI 中 sqlc 版本固定。
 
 ### 4.6 dump-first 原则
 
-编写生成逻辑前，先用最小插件把 `CodeGenRequest` dump 为 JSON，验证三件事：
+编写生成逻辑前，先用最小插件把 `GenerateRequest` dump 为 JSON，验证三件事：
 
 1. `COMMENT ON COLUMN` 文本是否进入 `columns[].comment`。
 2. timestamptz / uuid / jsonb / enum 在类型 oneof 中的真实形态。
@@ -175,7 +175,7 @@ diff。CI 中 sqlc 版本固定。
 
 ### 5.1 元数据来源与单一事实源
 
-使用 sqlc 解析 DDL 得到的 Catalog（`CodeGenRequest.Catalog`），而非 information_schema。
+使用 sqlc 解析 DDL 得到的 Catalog（`GenerateRequest.Catalog`），而非 information_schema。
 
 - **事实源纪律**：元数据的唯一载体是项目版本控制的 `schema.sql`（迁移文件）。生成物基于此产出，与运行时生产库解耦。
 - **DBA 手动修改的影响**：若 DBA 在生产库直接增删改注释，不影响已部署的二进制；但会导致 `schema.sql` 与生产库不一致。该漂移由
@@ -186,7 +186,7 @@ diff。CI 中 sqlc 版本固定。
 
 为消除人类自然语言注释与机器解析指令的歧义，DSL 引入**边界分隔符**，指令必须包裹在 `[ ]` 中且内容以 `@` 起始。
 **列级**：`<label> [@dynamic: <项,项,...>] [@sortable] [@hidden] [@selectable] [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]`
-**表级**：`[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...]`
+**表级**：`[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>] [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...]`
 
 ```sql
 COMMENT ON COLUMN users.id         IS 'ID [@dynamic: exact, in @sortable @selectable]';
@@ -201,7 +201,7 @@ COMMENT ON TABLE  customers        IS '客户表 [@scope: owner_user_id in fn_ac
 ```
 
 **`@api`（引用字段选项数据源）**：服务于**引用型 ID 选择器**（user_id / assignee_id 等，值为动态业务数据）——该字段
-where 值控件的 options 经 `GET {endpoint}` 拉取，而非静态 `enum`。约束：
+where 值控件的 options 经 `GET/POST {endpoint}` 拉取，而非静态 `enum`。约束：
 
 - 仅 `integer` / `uuid` / `string` 列可声明；DSL 参数 `value_key` / `label_key` **必填**（JSON 输出键为小驼峰
   `valueKey` / `labelKey`，即响应 `items` 每项的顶层字段名，值类型与字段 dataType 一致），`mode` 可选
@@ -499,11 +499,16 @@ P = K(c1,v1) ∨ ( E(c1,v1) ∧ K(c2,v2) ) ∨ … ∨ ( E(c1,v1) ∧ … ∧ E(
 
 ```go
 var UserField = struct {
-ID        dynq.FieldName
-Name      dynq.FieldName
-Status    dynq.FieldName
-CreatedAt dynq.FieldName
-}{ "id", "name", "status", "createdAt" }
+	ID        dynq.FieldName
+	Name      dynq.FieldName
+	Status    dynq.FieldName
+	CreatedAt dynq.FieldName
+}{
+	ID:        "id",
+	Name:      "name",
+	Status:    "status",
+	CreatedAt: "createdAt",
+}
 ```
 
 禁用选项的目标若不在本表 registry，在入口返回 error 显式暴露编程错误——禁用是权限收窄手段，静默 no-op 会制造安全假象。
@@ -608,11 +613,11 @@ func UsersQuerySchema(opts ...dynq.QueryOption) dynq.ResourceSchema
 
 ## 9. 运行时库 dynq（手写，不生成）
 
-协议是表无关的，协议机器也表无关：约 400 行手写包承载全部运行时逻辑与单测，生成代码只保留表相关数据与 switch。
+协议是表无关的，协议机器也表无关：单一手写包承载全部运行时逻辑与单测，生成代码只保留表相关数据与 switch。
 **职责**：
 
-- 信封类型定义（含 `includeTotal`）、严格解码（`MaxBytesReader` + 未知键拒绝）。
-- 操作符归一化（`Order`）、分页归一化（`Paginate`）、占位符预算校验辅助。
+- 信封类型定义（含 `includeTotal`）、严格解码（请求体上限 + 未知键拒绝 + 尾随数据拒绝）。
+- 操作符归一化（`NormalizeOrder`）、分页归一化（`NormalizePagination` / `CheckPagination`）、占位符预算与条件冲突检测辅助（`Budget` / `Slots`）。
 - `OrderBy` 结构、`FieldName` 类型。
 - **游标编解码**：`EncodeCursor` / `DecodeCursor`（base64url + JSON + FNV-64 指纹；指纹掺资源名；`f` 字符串编码；number 的
   NaN/±Inf 哨兵编解码；列值复用类型收敛函数）。
@@ -625,7 +630,7 @@ func UsersQuerySchema(opts ...dynq.QueryOption) dynq.ResourceSchema
 
 ```go
 type Error struct {
-Kind   string // "where" | "sort" | "pagination" | "cursor" | "option" | "fields"
+Kind   string // "where" | "sort" | "fields" | "pagination" | "cursor" | "scope" | "option" | "request"
 Index  int    // 数组下标
 Field  string
 Reason string // 如 "unknown field" / "op not allowed" / "field disabled in this context"
@@ -669,7 +674,7 @@ cursor → 无限滚动；两者皆含 → 混合分页；total 为 null 时隐�
 
 ### 10.3 @api 契约（引用字段选项数据源）
 
-`@api` 服务于**引用型 ID 选择器**（user_id / assignee_id 等）：该字段 where 值控件的 options 经 `GET {endpoint}` 拉取，
+`@api` 服务于**引用型 ID 选择器**（user_id / assignee_id 等）：该字段 where 值控件的 options 经 `GET/POST {endpoint}` 拉取，
 schema 输出字段级 `api` 对象：
 
 ```json
@@ -697,7 +702,7 @@ schema 输出字段级 `api` 对象：
 
 ### 10.4 前端消费模式
 
-通用 QueryBuilder 组件吃 schema：遍历 fields 渲染操作符下拉与对应控件、sortable 字段挂表格列头排序、pagination.options 渲染每页条数选择器。一次开发，全部列表页复用；端点级能力差异（禁用）对前端透明。QueryBuilder 不提供条件分组（OR）能力，与协议约束一致。
+通用 QueryBuilder 组件吃 schema：遍历 fields 渲染操作符下拉与对应控件、sortable 字段挂表格列头排序、按 pagination 的 defaultPageSize/maxPageSize 渲染每页条数选择器。一次开发，全部列表页复用；端点级能力差异（禁用）对前端透明。QueryBuilder 不提供条件分组（OR）能力，与协议约束一致。
 ---
 
 ## 11. 校验规则总表（全部为显式拒绝，无静默修正）
@@ -795,7 +800,7 @@ schema 输出字段级 `api` 对象：
 | overrides 盲区  | 见 §7.4 缓解优先级                                                                                                       |
 | 注释 DSL 可见性    | 策略在 DDL 中，IDE 不可跳转；以生成文件头回显补偿                                                                                      |
 | 禁用选项为字符串键     | 经生成字段常量缓解拼错；运行期 registry 校验兜底                                                                                      |
-| pgx 结构体扫描依赖反射 | 动态投影要求列数可变，放弃生成代码显式 `Scan`，改用 `pgx.RowToStructByName`（按值返回，匹配 `Items []T`），性能损耗经 pgx 内部优化可接受                       |
+| pgx 结构体扫描依赖反射 | 动态投影要求列数可变，放弃生成代码显式 `Scan`，改用 `pgx.RowToStructByNameLax`（按值返回，匹配 `Items []T`），性能损耗经 pgx 内部优化可接受                       |
 
 ---
 
@@ -841,7 +846,7 @@ schema 输出字段级 `api` 对象：
    seek 构造辅助（含 NULL 分情形模板）。
 2. **手写最复杂一张表的全套生成物**，冻结五份契约——协议信封（含 includeTotal、冲突规则）、响应信封、schema 形态、seek
    谓词模板、投影三标签真值表——前端凭 mock 并行开发。
-3. **dump CodeGenRequest**，完成验证。
+3. **dump GenerateRequest**，完成验证。
 4. 插件骨架：options 解析 + Catalog 遍历 + 空模板，process 模式跑通链路。
 5. 补全：类型映射表 + DSL 解析（边界隔离、null op 独立性、fuzzy 预设、hidden 互斥 fail、default_sort 校验）+
    registry/字段常量/Params/Parse（含冲突检测）/Schema/List（含有效排序解析、游标单点校验、投影并集）/Count 模板 + opts
@@ -858,7 +863,7 @@ schema 输出字段级 `api` 对象：
 `_dynamic_gen` 后缀以醒目标识。
 
 ```text
-tools/sqlc_gen_dynamic/     # 插件本体：entry_process.go / entry_wasm.go / gen.go / 模板
+tools/sqlc_gen_dynamic/     # 插件本体：main.go / options.go / types.go / dsl.go / catalog.go / gen*.go（生成模板）
 dynq/                     # 运行时库（手写，含全部运行时单测：收敛/游标/QueryOption/冲突检测）
 example/                    # 示例与测试用独立工程
  ├── db/schema.sql          # DDL + 注释 DSL（示例单一事实源）
@@ -866,7 +871,7 @@ example/                    # 示例与测试用独立工程
  ├── db/sqlc.yaml           # sqlc 配置（挂载本插件与 sqlc-gen-go）
  └── db/gen/                # 生成物目录
       ├── models.go         # sqlc-gen-go 产物（模型与固定查询示例）
-      └── users_dynamic_gen.go  # 本插件产物（registry / 字段常量 / Params / Parse / Schema / List / Count）
+      └── users_dynamic_gen.go 等  # 本插件产物（每张动态表一份：registry / 字段常量 / Params / Parse / Schema / List / Count）
 ```
 
 ---

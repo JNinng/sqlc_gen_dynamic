@@ -7,7 +7,7 @@ import (
 )
 
 // FieldAPI 是 @api 的选项数据源契约(字段级,前端消费)。
-// 该字段 where 值控件的选项不来自静态 enum,而是 GET {endpoint} 拉取:
+// 该字段 where 值控件的选项不来自静态 enum,而是 GET/POST {endpoint} 拉取:
 // 响应 body 为 items 数组,每项含 valueKey / labelKey 命名的顶层字段
 // (可复用本插件的 ListXxx 查询方法,或独立 options 接口)。
 // JSON 协议面统一小驼峰(接口交互契约)。

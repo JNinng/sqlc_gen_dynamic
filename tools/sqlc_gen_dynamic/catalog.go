@@ -7,7 +7,7 @@ import (
 	pb "github.com/sqlc-dev/plugin-sdk-go/plugin"
 )
 
-// catalog.go:CodeGenRequest.Catalog → TableSpec(生成期元数据 + 全部生成期校验)。
+// catalog.go:GenerateRequest.Catalog → TableSpec(生成期元数据 + 全部生成期校验)。
 
 // ColumnSpec 是一列的生成期规格。
 type ColumnSpec struct {
@@ -68,9 +68,9 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, erro
 	if schema == nil {
 		return nil, fmt.Errorf("schema %q not found in catalog", opts.Schema)
 	}
+	// 枚举名 → 值列表。
 	enums := enumMap(schema)
 
-	// 枚举名 → 值列表
 	// 逐表解析注释 DSL。
 	byName := map[string]*TableSpec{}
 	var order []*TableSpec

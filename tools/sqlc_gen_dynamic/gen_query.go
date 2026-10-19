@@ -5,7 +5,8 @@ import (
 	"strings"
 )
 
-// gen_query.go:Parse / validate / where / cursor 取值 / List / Count / Schema 段。
+// gen_query.go:Cast / Parse / validate / where 段(cursor 取值 / List / Count /
+// Schema 段见 gen_exec.go)。
 
 // Cast 返回 seek 谓词与 where 等值比较需要的显式 cast 后缀。
 // 文本形态参数(string)与 uuid/enum 列比较、[]byte/[]int64 与 jsonb/int_array

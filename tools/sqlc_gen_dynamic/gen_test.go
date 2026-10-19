@@ -13,8 +13,8 @@ import (
 )
 
 // golden file 测试:夹具 request.json 是真实 sqlc v1.31.1 产出的
-// GenerateRequest dump(见 bin/request_dump.json 生成方式),保证与宿主
-// 真实形态一致(dump-first 原则)。
+// GenerateRequest dump(经 DYNQ_DUMP_REQUEST 落盘,见 gen.go 与 sqlc.yaml env),
+// 保证与宿主真实形态一致(dump-first 原则)。
 
 const goldenOptions = `{
   "package": "gen",

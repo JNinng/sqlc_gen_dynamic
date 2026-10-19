@@ -1,6 +1,6 @@
 # sqlc_gen_dynamic
 
-sqlc 自定义 codegen 插件:从 DDL 注释 DSL 生成**动态单表 List 查询代码**(运行期组合 WHERE / ORDER BY / 分页 / 投影),与 sqlc-gen-go 的固定形态查询互补。配套运行时库 `dynq` 与示例工程 `example/`。设计文档见 [desc.md](./desc.md)。
+sqlc 自定义 codegen 插件:从 DDL 注释 DSL 生成**动态单表 List 查询代码**(运行期组合 WHERE / ORDER BY / 分页 / 投影),与 sqlc-gen-go 的固定形态查询互补。配套运行时库 `dynq` 与示例工程 `example/`。设计文档见 [desc.md](./desc.md);外部工程接入见 [usage.md](./usage.md)。
 
 ## 环境要求
 

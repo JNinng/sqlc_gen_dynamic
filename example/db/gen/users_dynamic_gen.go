@@ -5,6 +5,7 @@
 //	table users: [@page: 20/200]
 //	table users: [@default_sort: created_at DESC]
 //	table users: [@pk: id]
+//	table users: [@filter: deleted_at is_null]
 //	column users.id: [@dynamic: eq, neq, in, not_in @sortable @hideable]
 //	column users.name: [@dynamic: contains, prefix, suffix, eq, neq @sortable @hideable]
 //	column users.email: [@dynamic: eq, neq, in, not_in, prefix @hideable]
@@ -1282,7 +1283,9 @@ func validateUsersParams(params ListUsersParams, cfg *dynq.QueryConfig) error {
 }
 
 // buildUsersWhere 构建过滤 WHERE 条件,List 与 Count 共用,过滤结果一致。
-// 所有值均经占位符参数化,列名与操作符为白名单字面量。
+// 所有值均经占位符参数化,列名与操作符为白名单字面量;
+// 声明 @filter 的表头部附加服务端固定不变量(协议不可见、调用方不可控),
+// List 与 Count 共用,过滤视图天然一致。
 //
 // 参数:
 //   - params: 已通过 validate 形态复核的查询参数。
@@ -1291,6 +1294,10 @@ func validateUsersParams(params ListUsersParams, cfg *dynq.QueryConfig) error {
 //   - []sq.Sqlizer: 按 AND 语义组合的过滤条件列表。
 func buildUsersWhere(params ListUsersParams) []sq.Sqlizer {
 	var conds []sq.Sqlizer
+	// 服务端固定不变量(@filter):生成期声明、协议不可见的恒定过滤条件,
+	// 与后续条件 AND;字面量经分词器校验后作为 Go 字面量经占位符传入,
+	// 不拼进 SQL 文本,零注入面。
+	conds = append(conds, sq.Expr("deleted_at IS NULL"))
 	if params.ID != nil {
 		conds = append(conds, sq.Eq{"id": *params.ID})
 	}

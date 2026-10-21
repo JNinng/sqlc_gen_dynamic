@@ -6,6 +6,7 @@
 //	table projects: [@default_sort: created_at DESC]
 //	table projects: [@pk: id]
 //	table projects: [@scope: tenant_id eq fn_tenant_id(user_id:varchar)]
+//	table projects: [@filter: name eq 'template']
 //	column projects.id: [@dynamic: eq, neq @sortable @hideable]
 //	column projects.name: [@dynamic: contains, prefix, suffix @sortable @hideable]
 //	column projects.tenant_id: [@internal]
@@ -386,6 +387,8 @@ func validateProjectsParams(params ListProjectsParams, cfg *dynq.QueryConfig) er
 
 // buildProjectsWhere 构建过滤 WHERE 条件,List 与 Count 共用,过滤结果一致。
 // 所有值均经占位符参数化,列名与操作符为白名单字面量;
+// 声明 @filter 的表头部附加服务端固定不变量(协议不可见、调用方不可控),
+// List 与 Count 共用,过滤视图天然一致;
 // 声明 @scope 的表头部注入数据权限谓词(守卫函数名同为生成期白名单字面量),
 // 与业务条件 AND 组合,total 与 items 的权限视图天然一致
 //
@@ -396,6 +399,10 @@ func validateProjectsParams(params ListProjectsParams, cfg *dynq.QueryConfig) er
 //   - []sq.Sqlizer: 按 AND 语义组合的过滤条件列表。
 func buildProjectsWhere(params ListProjectsParams) []sq.Sqlizer {
 	var conds []sq.Sqlizer
+	// 服务端固定不变量(@filter):生成期声明、协议不可见的恒定过滤条件,
+	// 与后续条件 AND;字面量经分词器校验后作为 Go 字面量经占位符传入,
+	// 不拼进 SQL 文本,零注入面。
+	conds = append(conds, sq.Expr("name = ?", "template"))
 	// 数据权限谓词(@scope):多守卫 OR 组合,与业务条件 AND;列名/操作符/
 	// 守卫函数名/字面量参数为生成期白名单字面量,标识符参数经占位符参数化;
 	// IN-子查询与不相关标量函数在单条语句内只求值一次;params.Scope 非 nil

@@ -360,6 +360,37 @@ COMMENT ON TABLE sys_user IS '员工表 [@scope: id in_any fn_perm_user_ids(user
 
 行级数据权限:多守卫 OR 组合(任一命中即可见)。语法、参数类型词表、SQL 形态、fail-closed 与硬边界见 [§5](#5-行级数据权限scope);完整机制与调用形态见 [scope.md](./scope.md)。
 
+### 3.5 `@filter`
+
+**语法**
+
+```
+@filter: <列> <op> [<字面量>] [<列> <op> [<字面量>] ...]
+```
+
+**举例**
+
+```sql
+-- 软删不变量(is_null 不带值)+ 非负金额(整数字面量):
+COMMENT ON TABLE users IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null]';
+COMMENT ON TABLE orders IS '订单表 [@default_sort: created_at DESC @pk: id @page: 20/100 @filter: amount_cents gte 0]';
+
+-- 与 @scope 并存(filter 条件先于 scope 谓词发射,多条子句并列):
+COMMENT ON TABLE projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @pk: id @filter: name eq ''template'']';
+```
+
+**描述**
+
+服务端固定不变量:声明后作为恒定 WHERE 条件发射进 `buildXxxWhere` 头部(scope 谓词与业务条件之前),List 与 Count 共用,total 与 items 的过滤视图天然一致。
+
+- **它是服务端不变量,不是给调用方的过滤参数**:协议 `where` 无法覆盖或取消它;调用方可见的过滤能力仍由 `@dynamic` 声明。纯服务端列建议保持 `@internal`——该列不会出现在前端 schema,不变量无需额外保密处理;
+- op 封闭集合 `eq|gt|gte|lt|lte|is_null|not_null`;刻意排除 `neq` / `not_in`(`NOT IN` 撞 NULL 恒空,与 `@scope` 同一理由)与 `in`(它需要 `1, 2, 3` 这样的列表字面量,本指令不设这种形态);
+- `is_null` / `not_null` 不带值;`eq` / 比较类恰带一个字面量(`'字符串'` / 整数),校验后写进生成的代码(经占位符传参,不拼进 SQL 文本);
+- 同一列至多一条子句(一条不变量一列),重复 → 生成期 fail;不做 `is_null`+`eq` 之类的组合校验(两种条件组合出的结果可能恒为空集,由使用者自行判断);
+- 与列能力矩阵解耦:目标列可 `@internal`、可无 `@dynamic`、任意 PG 类型(仅存在性校验,不做类型推导);与同列 `@dynamic` 并存合法:不变量再 AND 上客户端条件,命中行只会更少,是预期行为而非冲突;
+- 表是否生成代码与 `@filter` 无关:只声明 `@filter` 的表不会生成(入选条件仍是 `@dynamic` / `@pk` / `options.tables`,与 `@scope` 同)。但声明本身的合法性一律校验——没入选的表上写了非法 `@filter`(如 op 手误)同样生成期 fail;合法却未入选则不产生任何效果;
+- 带引号字面量内连续空格会被分词器折叠(与 `@scope` 字面量同一既有限制),字面量应避免连续空格。
+
 ## 4. 类型映射与能力矩阵
 
 ### 4.1 PG 类型 → dataType
@@ -504,6 +535,11 @@ COMMENT ON TABLE sys_user IS '员工表 [@scope: id in_any fn_perm_user_ids(user
 | `@scope` 参数类型词表外                                                   | 生成期 fail                                                      |
 | `@scope` 同名参数类型冲突 或 不同参数名折叠同一 Go 字段名                               | 生成期 fail                                                      |
 | `@scope` 函数名非小写标识符或含非法字符                                           | 生成期 fail                                                      |
+| `@filter` op 不在封闭集合(`neq` / `not_in` / `in` 等)                     | 生成期 fail                                                      |
+| `@filter` `is_null` / `not_null` 带值                                | 生成期 fail                                                      |
+| `@filter` `eq` / 比较类缺字面量或字面量非 `'字符串'` / 整数                         | 生成期 fail                                                      |
+| `@filter` 同列重复子句                                                   | 生成期 fail                                                      |
+| `@filter` 目标列不存在或列名非 snake\_case                                   | 生成期 fail                                                      |
 | camelCase 折叠冲突(两列归一为同一逻辑键)                                         | 生成期 fail                                                      |
 | 生成范围为空(无 `@dynamic` / `@pk` 声明且未在 `options.tables` 中列出)            | 生成期 fail                                                      |
 
@@ -562,7 +598,7 @@ COMMENT ON COLUMN users.meta       IS '元数据 [@dynamic: has]';
 COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range @sortable @hideable]';
 COMMENT ON COLUMN users.updated_at IS '更新时间 [@dynamic: range, is_null, not_null @sortable]';
 COMMENT ON COLUMN users.deleted_at IS '删除时间 [@dynamic: is_null, not_null]';
-COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]';
+COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null]';
 
 -- @api 引用字段选项数据源
 CREATE TABLE orders (
@@ -604,7 +640,7 @@ CREATE TABLE projects (
 );
 
 COMMENT ON COLUMN projects.tenant_id IS '租户ID [@internal]';
-COMMENT ON TABLE  projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]';
+COMMENT ON TABLE  projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @filter: name eq ''template'']';
 
 -- @scope in_any 数组三态守卫(NULL=全租户放行 / {}=拒绝 / 非空=ANY 精确匹配)
 CREATE TABLE sys_user (

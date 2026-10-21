@@ -430,6 +430,84 @@ func TestGenerateDSLFailures(t *testing.T) {
 			},
 			wantErr: "unknown directive @scope",
 		},
+		// ---- @filter ----
+		{
+			name: "filter_unknown_op",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@filter: deleted_at between 1 @pk: id]")
+			},
+			wantErr: `@filter op "between" not allowed`,
+		},
+		{
+			name: "filter_missing_literal",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "orders", "订单表 [@filter: amount_cents gte @pk: id]")
+			},
+			wantErr: "wants exactly one literal",
+		},
+		{
+			name: "filter_literal_not_scalar",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@filter: status eq paid @pk: id]")
+			},
+			wantErr: `got "paid"`,
+		},
+		{
+			name: "filter_integer_out_of_range",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@filter: age eq 99999999999999999999 @pk: id]")
+			},
+			wantErr: `integer literal "99999999999999999999" out of range`,
+		},
+		{
+			name: "filter_trailing_column_without_op",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@filter: deleted_at is_null age @pk: id]")
+			},
+			wantErr: `wants an operator after column "age"`,
+		},
+		{
+			name: "filter_is_null_with_negative_int",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@filter: deleted_at is_null -1 @pk: id]")
+			},
+			wantErr: "takes no value",
+		},
+		{
+			name: "filter_bad_column",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@filter: DeletedAt is_null @pk: id]")
+			},
+			wantErr: "not a snake_case identifier",
+		},
+		{
+			name: "filter_duplicate_column",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@filter: deleted_at is_null deleted_at not_null @pk: id]")
+			},
+			wantErr: "filtered twice",
+		},
+		{
+			name: "filter_is_null_with_value",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@filter: deleted_at is_null 'x' @pk: id]")
+			},
+			wantErr: "takes no value",
+		},
+		{
+			name: "filter_unknown_column",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@filter: ghost is_null @pk: id]")
+			},
+			wantErr: `@filter column "ghost" not found`,
+		},
+		{
+			name: "filter_not_allowed_on_column",
+			mutate: func(r *pb.GenerateRequest) {
+				setComment(r, "users", "name", "姓名 [@filter: id eq 1]")
+			},
+			wantErr: "unknown directive @filter",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

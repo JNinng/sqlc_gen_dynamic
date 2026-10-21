@@ -41,7 +41,7 @@ COMMENT ON COLUMN users.meta       IS '元数据 [@dynamic: has]';
 COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range @sortable @hideable]';
 COMMENT ON COLUMN users.updated_at IS '更新时间 [@dynamic: range, is_null, not_null @sortable]';
 COMMENT ON COLUMN users.deleted_at IS '删除时间 [@dynamic: is_null, not_null]';
-COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]';
+COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null]';
 
 CREATE TABLE orders (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -57,7 +57,7 @@ COMMENT ON COLUMN orders.user_id  IS '用户ID [@dynamic: eq, in @hideable @api:
 COMMENT ON COLUMN orders.amount_cents IS '金额（分） [@dynamic: range @sortable @hideable]';
 COMMENT ON COLUMN orders.status   IS '状态 [@dynamic: exact, in @sortable @hideable]';
 COMMENT ON COLUMN orders.created_at IS '创建时间 [@dynamic: range @sortable @hideable]';
-COMMENT ON TABLE  orders          IS '订单表 [@default_sort: created_at DESC @pk: id @page: 20/100]';
+COMMENT ON TABLE  orders          IS '订单表 [@default_sort: created_at DESC @pk: id @page: 20/100 @filter: amount_cents gte 0]';
 
 -- ---- 行级数据权限(@scope 演示)----
 -- 部门闭包表:ancestor → descendant,含自身配对(d_eng → d_eng);
@@ -225,7 +225,7 @@ COMMENT ON COLUMN projects.name IS '项目名 [@dynamic: fuzzy @sortable @hideab
 COMMENT ON COLUMN projects.tenant_id IS '租户ID [@internal]';
 COMMENT ON COLUMN projects.owner_user_id IS '归属用户ID [@internal]';
 COMMENT ON COLUMN projects.created_at IS '创建时间 [@dynamic: range @sortable @hideable]';
-COMMENT ON TABLE  projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]';
+COMMENT ON TABLE  projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @filter: name eq ''template'']';
 
 -- audit_logs 表:pk-only 最小接入形态——表级 @pk 单独入选,零 @dynamic 列:
 -- 仅生成 List/Count/Parse/Schema 骨架(无过滤能力),验证零 ops 产物可编译。

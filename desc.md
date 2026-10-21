@@ -186,7 +186,7 @@ diff。CI 中 sqlc 版本固定。
 
 为消除人类自然语言注释与机器解析指令的歧义，DSL 引入**边界分隔符**，指令必须包裹在 `[ ]` 中且内容以 `@` 起始。
 **列级**：`<label> [@dynamic: <项,项,...>] [@sortable] [@internal] [@hideable] [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]`
-**表级**：`[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>] [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...]`
+**表级**：`[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>] [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...] [@filter: <列> <op> [字面量] ...]`
 
 > 列级指令的现行名为 `@internal` / `@hideable`；旧名 `@hidden` / `@selectable` 在兼容期解析为等价能力（生成期输出 deprecation 提示，计划 v0.6.0 移除），新 DDL 应使用现行名。
 
@@ -220,7 +220,7 @@ where 值控件的 options 经 `GET/POST {endpoint}` 拉取，而非静态 `enum
 3. **Label 纯洁性**：非指令块文本（含其中出现的任何 `@` 符号与方括号）原样保留为展示文本，不触发任何解析逻辑。
 4. **多指令块**：同一列允许多个指令块，按出现顺序合并解析；同名指令重复声明等价于声明一次（去重）。
 5. **指令识别**：合法列级指令为 `@dynamic` / `@sortable` / `@internal` / `@hideable` / `@api`；合法表级指令为 `@default_sort` /
-   `@page` / `@pk` / `@scope`。`[ ]` 内出现白名单外的 `@xxx`（如手误 `@sortble`）→ **生成期 fail**，报错定位到具体列与未知标签名，杜绝静默忽略导致的能力丢失。
+   `@page` / `@pk` / `@scope` / `@filter`。`[ ]` 内出现白名单外的 `@xxx`（如手误 `@sortble`）→ **生成期 fail**，报错定位到具体列与未知标签名，杜绝静默忽略导致的能力丢失。
 6. **无 `[ ]` 或无指令块的纯文本注释**：纯业务说明，直接作为 label，跳过解析。
 7. **无 `@dynamic` 的列**不参与过滤能力生成（受 `default_ops` 控制）。
 8. **`is_null` / `not_null` 完全独立**：二者互不捆绑、不入任何预设；列可空不会自动获得它们，必须逐个显式声明；声明于非空列 →
@@ -241,7 +241,8 @@ where 值控件的 options 经 `GET/POST {endpoint}` 拉取，而非静态 `enum
     - `@hideable` 是**纯 UI 提示**：服务端 `fields` 点名白名单 = 全部非 `@internal` 列；`@hideable` 不参与服务端校验，仅流入前端
       schema 决定列头渲染与显隐交互。
 11. **表级指令校验**：`@default_sort` 的目标列必须存在、已声明 `@sortable` 且非 `@internal`，方向必填，否则生成期 fail；`@page`
-    的默认值必须 ≤ 上限；`@scope` 见下方专节。
+    的默认值必须 ≤ 上限；`@scope` 见下方专节；`@filter` 的目标列必须存在（与列能力矩阵解耦：可 `@internal`、可无 `@dynamic`、
+    任意 PG 类型），同列至多一条子句，op 白名单 / 字面量规则 / 语义见 [dsl.md §3.5](./dsl.md#35-filter)。
 
 **`@scope`（行级数据权限）**：表级微型语法 `<列> <op> <函数>(<参数,...>)`，多守卫恒为 OR 组合。权限规则集中在 DB
 守卫函数里只写一次，函数定义在 sqlc 可见的 schema 内随迁移版本化。要点：

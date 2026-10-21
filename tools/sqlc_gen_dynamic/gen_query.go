@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -227,6 +228,9 @@ func (tc *tableCode) whereSection() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "// build%sWhere 构建过滤 WHERE 条件,List 与 Count 共用,过滤结果一致。\n", tc.res)
 	b.WriteString("// 所有值均经占位符参数化,列名与操作符为白名单字面量")
+	if len(spec.Filters) > 0 {
+		b.WriteString(";\n// 声明 @filter 的表头部附加服务端固定不变量(协议不可见、调用方不可控),\n// List 与 Count 共用,过滤视图天然一致")
+	}
 	if len(spec.Scope) > 0 {
 		b.WriteString(";\n// 声明 @scope 的表头部注入数据权限谓词(守卫函数名同为生成期白名单字面量),\n// 与业务条件 AND 组合,total 与 items 的权限视图天然一致\n")
 	} else {
@@ -240,6 +244,15 @@ func (tc *tableCode) whereSection() string {
 	b.WriteString("//   - []sq.Sqlizer: 按 AND 语义组合的过滤条件列表。\n")
 	fmt.Fprintf(&b, "func build%sWhere(params List%sParams) []sq.Sqlizer {\n", tc.res, tc.res)
 	b.WriteString("\tvar conds []sq.Sqlizer\n")
+	if len(spec.Filters) > 0 {
+		// 服务端不变量(@filter):恒定过滤条件,先于 scope 谓词与业务条件。
+		b.WriteString("\t// 服务端固定不变量(@filter):生成期声明、协议不可见的恒定过滤条件,\n")
+		b.WriteString("\t// 与后续条件 AND;字面量经分词器校验后作为 Go 字面量经占位符传入,\n")
+		b.WriteString("\t// 不拼进 SQL 文本,零注入面。\n")
+		for i := range spec.Filters {
+			fmt.Fprintf(&b, "\tconds = append(conds, %s)\n", tc.filterExpr(&spec.Filters[i]))
+		}
+	}
 	if len(spec.Scope) > 0 {
 		b.WriteString("\t// 数据权限谓词(@scope):多守卫 OR 组合,与业务条件 AND;列名/操作符/\n")
 		b.WriteString("\t// 守卫函数名/字面量参数为生成期白名单字面量,标识符参数经占位符参数化;\n")
@@ -392,4 +405,21 @@ func (tc *tableCode) scopeGuardExpr(g *scopeGuard) string {
 		return fmt.Sprintf("sq.Expr(%q)", frag)
 	}
 	return fmt.Sprintf("sq.Expr(%q, %s)", frag, strings.Join(valExprs, ", "))
+}
+
+// filterExpr 生成单个 @filter 固定条件的 sq.Expr(...) 语句:is_null/not_null
+// 为无参谓词;eq/比较类的字面量经分词器校验后作为 Go 字面量经占位符传入
+// (不拼进 SQL 文本,零注入面;字符串字面量经 strconv.Quote 安全落源码)。
+func (tc *tableCode) filterExpr(f *filterDirective) string {
+	switch f.Op {
+	case "is_null":
+		return fmt.Sprintf("sq.Expr(%q)", f.Column+" IS NULL")
+	case "not_null":
+		return fmt.Sprintf("sq.Expr(%q)", f.Column+" IS NOT NULL")
+	}
+	frag := f.Column + " " + scopeOpSQL[f.Op] + " ?"
+	if f.Quoted {
+		return fmt.Sprintf("sq.Expr(%q, %s)", frag, strconv.Quote(f.Literal))
+	}
+	return fmt.Sprintf("sq.Expr(%q, %s)", frag, f.Literal)
 }

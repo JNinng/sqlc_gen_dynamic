@@ -5,6 +5,7 @@
 //	table orders: [@page: 20/100]
 //	table orders: [@default_sort: created_at DESC]
 //	table orders: [@pk: id]
+//	table orders: [@filter: amount_cents gte 0]
 //	column orders.order_no: [@dynamic: eq, neq, prefix @hideable]
 //	column orders.user_id: [@dynamic: eq, in, not_in @hideable @api: /api/v1/users/options value_key=id label_key=name]
 //	column orders.amount_cents: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
@@ -527,7 +528,9 @@ func validateOrdersParams(params ListOrdersParams, cfg *dynq.QueryConfig) error 
 }
 
 // buildOrdersWhere 构建过滤 WHERE 条件,List 与 Count 共用,过滤结果一致。
-// 所有值均经占位符参数化,列名与操作符为白名单字面量。
+// 所有值均经占位符参数化,列名与操作符为白名单字面量;
+// 声明 @filter 的表头部附加服务端固定不变量(协议不可见、调用方不可控),
+// List 与 Count 共用,过滤视图天然一致。
 //
 // 参数:
 //   - params: 已通过 validate 形态复核的查询参数。
@@ -536,6 +539,10 @@ func validateOrdersParams(params ListOrdersParams, cfg *dynq.QueryConfig) error 
 //   - []sq.Sqlizer: 按 AND 语义组合的过滤条件列表。
 func buildOrdersWhere(params ListOrdersParams) []sq.Sqlizer {
 	var conds []sq.Sqlizer
+	// 服务端固定不变量(@filter):生成期声明、协议不可见的恒定过滤条件,
+	// 与后续条件 AND;字面量经分词器校验后作为 Go 字面量经占位符传入,
+	// 不拼进 SQL 文本,零注入面。
+	conds = append(conds, sq.Expr("amount_cents >= ?", 0))
 	if params.OrderNo != nil {
 		conds = append(conds, sq.Eq{"order_no": *params.OrderNo})
 	}

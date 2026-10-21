@@ -128,7 +128,7 @@ type Customer struct {
 	DeletedAt pgtype.Timestamptz `db:"deleted_at" json:"deleted_at"`
 }
 
-// 订单表 [@default_sort: created_at DESC @pk: id @page: 20/100]
+// 订单表 [@default_sort: created_at DESC @pk: id @page: 20/100 @filter: amount_cents gte 0]
 type Order struct {
 	ID int64 `db:"id" json:"id"`
 	// 订单号 [@dynamic: exact, prefix @hideable]
@@ -143,7 +143,7 @@ type Order struct {
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 }
 
-// 项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]
+// 项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @filter: name eq 'template']
 type Project struct {
 	// ID [@dynamic: exact @sortable @hideable]
 	ID int64 `db:"id" json:"id"`
@@ -179,7 +179,7 @@ type SysUser struct {
 	DeletedAt   pgtype.Timestamptz `db:"deleted_at" json:"deleted_at"`
 }
 
-// 用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]
+// 用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null]
 type User struct {
 	// ID [@dynamic: exact, in @sortable @hideable]
 	ID int64 `db:"id" json:"id"`

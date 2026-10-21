@@ -17,6 +17,7 @@ import (
 //       [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]
 // 表级:[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>]
 //       [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...]
+//       [@filter: <列> <op> [字面量] ...]
 
 type dslTag struct {
 	Name    string
@@ -152,7 +153,7 @@ func validateTagNames(where, scope string, tags []dslTag) error {
 			"hidden": true, "selectable": true, // 弃用旧名(兼容期别名)
 		}
 	} else {
-		allowed = map[string]bool{"default_sort": true, "page": true, "pk": true, "scope": true}
+		allowed = map[string]bool{"default_sort": true, "page": true, "pk": true, "scope": true, "filter": true}
 	}
 	for _, t := range tags {
 		if !allowed[t.Name] {
@@ -577,6 +578,105 @@ func scopeEcho(guards []scopeGuard) string {
 			}
 		}
 		parts[i] = fmt.Sprintf("%s %s %s(%s)", g.Column, g.Op, g.Fn, strings.Join(args, ", "))
+	}
+	return strings.Join(parts, " ")
+}
+
+// filterDirective 是 @filter 声明的一项服务端固定条件:目标列、谓词操作符与
+// 内联字面量(is_null/not_null 不带值)。
+type filterDirective struct {
+	Column  string
+	Op      string // eq | gt | gte | lt | lte | is_null | not_null
+	Literal string // eq/比较类的字面量原文;is_null/not_null 为空
+	Quoted  bool   // 字面量为单引号字符串(true)或整数(false)
+}
+
+// filterOps 是 @filter 谓词操作符的封闭集合。刻意排除 neq/not_in(NOT IN 撞
+// NULL 恒空,与 @scope 同一理由)与 in(无字面量列表形态)。
+var filterOps = map[string]bool{"eq": true, "gt": true, "gte": true, "lt": true, "lte": true, "is_null": true, "not_null": true}
+
+// parseFilterDirective 解析 @filter: "<列> <op> [字面量] ..." 多子句并列,
+// 复用 @scope 分词器(scanScopeTokens;引号字面量内连续空格折叠为同一既有限制)。
+//   - 列:目标物理列名(snake_case),存在性在表级校验;同列至多一条子句
+//     (一条不变量一列),重复 → 生成期 fail;
+//   - op:封闭集合 eq|gt|gte|lt|lte|is_null|not_null;
+//   - is_null/not_null 不带值;eq/比较类恰带一个字面量('字符串'/整数),
+//     经分词器校验后内联。
+func parseFilterDirective(where string, t dslTag) ([]filterDirective, error) {
+	toks, err := scanScopeTokens(where, t.Payload)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(format string, args ...any) error {
+		return fmt.Errorf("%s: %s", where, fmt.Sprintf(format, args...))
+	}
+	var out []filterDirective
+	seenColumn := map[string]bool{}
+	pos := 0
+	for pos < len(toks) {
+		colTok := toks[pos]
+		pos++
+		if colTok.kind != tokIdent || !scopeNameRe.MatchString(colTok.text) {
+			return nil, fail("@filter column %q is not a snake_case identifier", colTok.text)
+		}
+		if seenColumn[colTok.text] {
+			return nil, fail("@filter column %q filtered twice (one invariant per column)", colTok.text)
+		}
+		if pos >= len(toks) {
+			return nil, fail("@filter wants an operator after column %q (one of: eq, gt, gte, is_null, lt, lte, not_null)", colTok.text)
+		}
+		opTok := toks[pos]
+		pos++
+		if opTok.kind != tokIdent || !filterOps[opTok.text] {
+			return nil, fail("@filter op %q not allowed (want one of: eq, gt, gte, is_null, lt, lte, not_null)", opTok.text)
+		}
+		f := filterDirective{Column: colTok.text, Op: opTok.text}
+		if opTok.text == "is_null" || opTok.text == "not_null" {
+			// 不带值:下一 token 若存在,必为字面量形态(新子句以列名起始,
+			// 列名为标识符)——字面量出现在此即违规。
+			if pos < len(toks) && toks[pos].kind != tokIdent {
+				return nil, fail("@filter op %s takes no value, got %q", opTok.text, toks[pos].text)
+			}
+		} else {
+			if pos >= len(toks) {
+				return nil, fail("@filter op %s wants exactly one literal ('string'/integer), got end of payload", opTok.text)
+			}
+			litTok := toks[pos]
+			pos++
+			switch litTok.kind {
+			case tokString:
+				f.Literal, f.Quoted = litTok.text, true
+			case tokInt:
+				if _, perr := strconv.ParseInt(litTok.text, 10, 64); perr != nil {
+					return nil, fail("@filter integer literal %q out of range", litTok.text)
+				}
+				f.Literal = litTok.text
+			default:
+				return nil, fail("@filter op %s wants exactly one literal ('string'/integer), got %q", opTok.text, litTok.text)
+			}
+		}
+		seenColumn[f.Column] = true
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		return nil, fail(`@filter wants "<column> <op> [literal] ...", got %q`, t.Payload)
+	}
+	return out, nil
+}
+
+// filterEcho 把解析后的固定条件重建为规范文本,用于生成文件头部的策略来源回显。
+func filterEcho(filters []filterDirective) string {
+	parts := make([]string, len(filters))
+	for i, f := range filters {
+		if f.Literal == "" {
+			parts[i] = f.Column + " " + f.Op
+			continue
+		}
+		if f.Quoted {
+			parts[i] = fmt.Sprintf("%s %s '%s'", f.Column, f.Op, f.Literal)
+		} else {
+			parts[i] = f.Column + " " + f.Op + " " + f.Literal
+		}
 	}
 	return strings.Join(parts, " ")
 }

@@ -51,7 +51,7 @@ INSERT INTO orders (order_no, user_id, amount_cents, status, created_at) VALUES
 ('C-1', (SELECT id FROM users WHERE name='Carol'),  500, 'shipped', '2026-02-03 10:00:00+00');
 
 -- @scope 演示数据:组织架构 d_root → {d_eng, d_sales}(闭包含自身配对);
--- 租户 t_acme / t_globe;customers 六行 + projects 三行 + 一条显式共享授权。
+-- 租户 t_acme / t_globe;customers 六行 + projects 五行 + 一条显式共享授权。
 INSERT INTO sys_dept_closure (ancestor_id, descendant_id) VALUES
 ('d_root', 'd_root'), ('d_root', 'd_eng'), ('d_root', 'd_sales'),
 ('d_eng',  'd_eng'),  ('d_sales', 'd_sales');
@@ -73,7 +73,11 @@ INSERT INTO sys_resource_grant (resource, user_id, record_id) VALUES
 INSERT INTO projects (name, tenant_id, owner_user_id, created_at) VALUES
 ('Portal重构',    't_acme',  'u1', '2026-04-01 10:00:00+00'),
 ('移动端v2',      't_acme',  'u2', '2026-04-02 10:00:00+00'),
-('Globe年度审计', 't_globe', 'u3', '2026-04-03 10:00:00+00');
+('Globe年度审计', 't_globe', 'u3', '2026-04-03 10:00:00+00'),
+-- template 行是 @filter: name eq ''template'' 不变量的可见集:两租户各一行,
+-- 租户守卫演示可同时呈现不变量(非 template 全被排除)与隔离(t_globe 行不可见)。
+('template',      't_acme',  'u1', '2026-04-04 10:00:00+00'),
+('template',      't_globe', 'u3', '2026-04-05 10:00:00+00');
 `
 
 func main() {
@@ -106,7 +110,7 @@ func run() error {
 	demoConflict(pool)
 	fmt.Println("== ③ offset 分页(page 2, page_size 3,默认排序 created_at DESC) ==")
 	demoOffset(ctx, pool)
-	fmt.Println("== ④ 游标模式翻全页(score ASC, 12 行 × page_size 5) ==")
+	fmt.Println("== ④ 游标模式翻全页(score ASC,可见 11 行 × page_size 5) ==")
 	demoCursor(ctx, pool)
 	fmt.Println("== ⑤ 窄投影(fields=[name],id/createdAt 强制并入) ==")
 	demoProjection(ctx, pool)
@@ -453,7 +457,9 @@ func demoScope(ctx context.Context, pool *pgxpool.Pool) {
 	}
 	fmt.Printf("   scopes=[3] + name contains Bob → %d 行(权限视图内收窄)\n", len(res.Items))
 
-	// eq 标量守卫:projects 只看本租户(Diana ∈ t_acme,不见 t_globe 项目)。
+	// eq 标量守卫:projects 只看本租户(Diana ∈ t_acme,不见 t_globe 项目);
+	// 表级 @filter: name eq 'template' 同时生效——非 template 项目被服务端
+	// 固定不变量排除,可见集仅剩本租户的 template 行(两个门正交叠加)。
 	authedProj := dynq.WithScope(ctx, &gen.ProjectsScope{UserID: "u4"})
 	pp, err := gen.ParseProjectsQuery(&dynq.Query{})
 	if err != nil {
@@ -475,7 +481,7 @@ func demoScope(ctx context.Context, pool *pgxpool.Pool) {
 	for _, pr := range projRes.Items {
 		projNames = append(projNames, pr.Name)
 	}
-	fmt.Printf("   Diana projects(eq 租户守卫) → total=%d items=%v\n", projTotal, projNames)
+	fmt.Printf("   Diana projects(租户守卫 × @filter name eq 'template') → total=%d items=%v\n", projTotal, projNames)
 
 	// fail-closed:声明 @scope 的表未注入 Scope → 显式报错,不静默全量。
 	_, err = gen.ListCustomers(ctx, pool, gen.ListCustomersParams{})

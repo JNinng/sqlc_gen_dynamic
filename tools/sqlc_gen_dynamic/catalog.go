@@ -46,8 +46,9 @@ type TableSpec struct {
 	PageDefault     int
 	PageMax         int
 	TableDirectives []string
-	Scope           []scopeGuard  // @scope 守卫声明;空 = 未声明
-	ScopeParams     []scopeParam  // 守卫标识符参数的并集(声明序),驱动 Scope 结构体
+	Scope           []scopeGuard      // @scope 守卫声明;空 = 未声明
+	ScopeParams     []scopeParam      // 守卫标识符参数的并集(声明序),驱动 Scope 结构体
+	Filters         []filterDirective // @filter 服务端固定条件;空 = 未声明
 }
 
 // scopeParam 是 Scope 结构体的一个字段来源:DSL 参数名 + Go 类型。
@@ -292,6 +293,14 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		}
 		spec.ScopeParams = params
 	}
+	if t, ok := findTag(tableTags, "filter"); ok {
+		filters, err := parseFilterDirective(tableWhere, t)
+		if err != nil {
+			return nil, false, nil, err
+		}
+		spec.Filters = filters
+		spec.TableDirectives = append(spec.TableDirectives, "@filter: "+filterEcho(filters))
+	}
 
 	_, hasPK := findTag(tableTags, "pk")
 	included := hasDynamicDecl || hasPK
@@ -442,6 +451,23 @@ func validateTable(spec *TableSpec) error {
 		}
 		if !found {
 			return fmt.Errorf("table %s: @scope column %q not found", spec.Name, g.Column)
+		}
+	}
+
+	// @filter 目标列必须存在;与能力矩阵解耦——filter 列可以 @internal、可以
+	// 无 @dynamic、可以是任意 PG 类型(@scope 同款先验:类型契约由字面量与列
+	// 类型的 PG 兼容性保证,生成期不做类型推导)。@internal 列由生成的 registry
+	// 字段 Hidden 标记对协议不可见,纯服务端不变量列建议保持 @internal。
+	for _, f := range spec.Filters {
+		found := false
+		for _, c := range spec.Columns {
+			if c.Physical == f.Column {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("table %s: @filter column %q not found", spec.Name, f.Column)
 		}
 	}
 

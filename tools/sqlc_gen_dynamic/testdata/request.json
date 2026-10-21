@@ -221,7 +221,7 @@
                 }
               }
             ],
-            "comment":  "用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]"
+            "comment":  "用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null]"
           },
           {
             "rel":  {
@@ -303,7 +303,7 @@
                 }
               }
             ],
-            "comment":  "订单表 [@default_sort: created_at DESC @pk: id @page: 20/100]"
+            "comment":  "订单表 [@default_sort: created_at DESC @pk: id @page: 20/100 @filter: amount_cents gte 0]"
           },
           {
             "rel":  {
@@ -608,7 +608,7 @@
                 }
               }
             ],
-            "comment":  "项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]"
+            "comment":  "项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @filter: name eq 'template']"
           }
         ],
         "enums":  [

@@ -62,7 +62,7 @@ sha256sum bin/sqlc_gen_dynamic.wasm
 
 > 完整参考(语法规则、列级 / 表级指令、PG 类型 → dataType 映射、能力矩阵、预设展开、操作符语义、校验规则与 fail 条件全集)见 [dsl.md](./dsl.md)。
 
-生成策略全部声明在 DDL 注释中,随迁移版本化。指令必须包裹在 `[ ]` 中且内容以 `@` 起始;不以 `@` 起始的方括号是 label 字面文本(人类注释不误伤)。指令分列级(`@dynamic` / `@sortable` / `@hideable` / `@internal` / `@api`;旧名 `@selectable` / `@hidden` 为兼容期别名,生成期有 deprecation 提示)与表级(`@default_sort` / `@page` / `@pk` / `@scope`)两类,涵盖过滤 / 排序 / 返回列选择 / 分页 / 行级权限 / 选项数据源等能力。
+生成策略全部声明在 DDL 注释中,随迁移版本化。指令必须包裹在 `[ ]` 中且内容以 `@` 起始;不以 `@` 起始的方括号是 label 字面文本(人类注释不误伤)。指令分列级(`@dynamic` / `@sortable` / `@hideable` / `@internal` / `@api`;旧名 `@selectable` / `@hidden` 为兼容期别名,生成期有 deprecation 提示)与表级(`@default_sort` / `@page` / `@pk` / `@scope` / `@filter`)两类,涵盖过滤 / 排序 / 返回列选择 / 分页 / 行级权限 / 选项数据源 / 服务端固定不变量等能力。
 
 示例:
 

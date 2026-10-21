@@ -34,7 +34,7 @@
               {
                 "name":  "id",
                 "notNull":  true,
-                "comment":  "ID [@dynamic: exact, in @sortable @selectable]",
+                "comment":  "ID [@dynamic: exact, in @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -47,7 +47,7 @@
               {
                 "name":  "name",
                 "notNull":  true,
-                "comment":  "姓名 [@dynamic: fuzzy, exact @sortable @selectable]",
+                "comment":  "姓名 [@dynamic: fuzzy, exact @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -59,7 +59,7 @@
               {
                 "name":  "email",
                 "notNull":  true,
-                "comment":  "用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @selectable]",
+                "comment":  "用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -71,7 +71,7 @@
               {
                 "name":  "password",
                 "notNull":  true,
-                "comment":  "密码 [@hidden]",
+                "comment":  "密码 [@internal]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -83,7 +83,7 @@
               {
                 "name":  "status",
                 "notNull":  true,
-                "comment":  "状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @selectable]",
+                "comment":  "状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -105,7 +105,7 @@
               },
               {
                 "name":  "age",
-                "comment":  "年龄 [@dynamic: exact, in, range @sortable @selectable]",
+                "comment":  "年龄 [@dynamic: exact, in, range @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -117,7 +117,7 @@
               },
               {
                 "name":  "score",
-                "comment":  "评分 [0-100] [@dynamic: range @sortable @selectable]",
+                "comment":  "评分 [0-100] [@dynamic: range @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -129,7 +129,7 @@
               },
               {
                 "name":  "balance",
-                "comment":  "余额 [元] [@dynamic: range @selectable]",
+                "comment":  "余额 [元] [@dynamic: range @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -141,7 +141,7 @@
               },
               {
                 "name":  "birth_date",
-                "comment":  "生日 [@dynamic: eq, range @selectable]",
+                "comment":  "生日 [@dynamic: eq, range @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -164,7 +164,7 @@
               {
                 "name":  "tags",
                 "isArray":  true,
-                "comment":  "标签 [@dynamic: in @selectable]",
+                "comment":  "标签 [@dynamic: in @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -189,7 +189,7 @@
               {
                 "name":  "created_at",
                 "notNull":  true,
-                "comment":  "创建时间 [@dynamic: exact, in, range @sortable @selectable]",
+                "comment":  "创建时间 [@dynamic: exact, in, range @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "users"
@@ -243,7 +243,7 @@
               {
                 "name":  "order_no",
                 "notNull":  true,
-                "comment":  "订单号 [@dynamic: exact, prefix @selectable]",
+                "comment":  "订单号 [@dynamic: exact, prefix @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "orders"
@@ -255,7 +255,7 @@
               {
                 "name":  "user_id",
                 "notNull":  true,
-                "comment":  "用户ID [@dynamic: eq, in @selectable @api: /api/v1/users/options value_key=id label_key=name]",
+                "comment":  "用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name]",
                 "length":  -1,
                 "table":  {
                   "name":  "orders"
@@ -268,7 +268,7 @@
               {
                 "name":  "amount_cents",
                 "notNull":  true,
-                "comment":  "金额（分） [@dynamic: range @sortable @selectable]",
+                "comment":  "金额（分） [@dynamic: range @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "orders"
@@ -281,7 +281,7 @@
               {
                 "name":  "status",
                 "notNull":  true,
-                "comment":  "状态 [@dynamic: exact, in @sortable @selectable]",
+                "comment":  "状态 [@dynamic: exact, in @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "orders"
@@ -293,7 +293,7 @@
               {
                 "name":  "created_at",
                 "notNull":  true,
-                "comment":  "创建时间 [@dynamic: range @sortable @selectable]",
+                "comment":  "创建时间 [@dynamic: range @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "orders"
@@ -452,7 +452,7 @@
               {
                 "name":  "id",
                 "notNull":  true,
-                "comment":  "ID [@dynamic: exact @sortable @selectable]",
+                "comment":  "ID [@dynamic: exact @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "customers"
@@ -465,7 +465,7 @@
               {
                 "name":  "name",
                 "notNull":  true,
-                "comment":  "客户名 [@dynamic: fuzzy @sortable @selectable]",
+                "comment":  "客户名 [@dynamic: fuzzy @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "customers"
@@ -477,7 +477,7 @@
               {
                 "name":  "amount_cents",
                 "notNull":  true,
-                "comment":  "金额（分） [@dynamic: range @sortable @selectable]",
+                "comment":  "金额（分） [@dynamic: range @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "customers"
@@ -490,7 +490,7 @@
               {
                 "name":  "owner_user_id",
                 "notNull":  true,
-                "comment":  "归属用户ID [@hidden]",
+                "comment":  "归属用户ID [@internal]",
                 "length":  -1,
                 "table":  {
                   "name":  "customers"
@@ -503,7 +503,7 @@
               {
                 "name":  "owner_dept_id",
                 "notNull":  true,
-                "comment":  "归属部门ID [@hidden]",
+                "comment":  "归属部门ID [@internal]",
                 "length":  -1,
                 "table":  {
                   "name":  "customers"
@@ -516,7 +516,7 @@
               {
                 "name":  "created_at",
                 "notNull":  true,
-                "comment":  "创建时间 [@dynamic: range @sortable @selectable]",
+                "comment":  "创建时间 [@dynamic: range @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "customers"
@@ -547,7 +547,7 @@
               {
                 "name":  "id",
                 "notNull":  true,
-                "comment":  "ID [@dynamic: exact @sortable @selectable]",
+                "comment":  "ID [@dynamic: exact @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "projects"
@@ -560,7 +560,7 @@
               {
                 "name":  "name",
                 "notNull":  true,
-                "comment":  "项目名 [@dynamic: fuzzy @sortable @selectable]",
+                "comment":  "项目名 [@dynamic: fuzzy @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "projects"
@@ -572,7 +572,7 @@
               {
                 "name":  "tenant_id",
                 "notNull":  true,
-                "comment":  "租户ID [@hidden]",
+                "comment":  "租户ID [@internal]",
                 "length":  -1,
                 "table":  {
                   "name":  "projects"
@@ -585,7 +585,7 @@
               {
                 "name":  "owner_user_id",
                 "notNull":  true,
-                "comment":  "归属用户ID [@hidden]",
+                "comment":  "归属用户ID [@internal]",
                 "length":  -1,
                 "table":  {
                   "name":  "projects"
@@ -598,7 +598,7 @@
               {
                 "name":  "created_at",
                 "notNull":  true,
-                "comment":  "创建时间 [@dynamic: range @sortable @selectable]",
+                "comment":  "创建时间 [@dynamic: range @sortable @hideable]",
                 "length":  -1,
                 "table":  {
                   "name":  "projects"

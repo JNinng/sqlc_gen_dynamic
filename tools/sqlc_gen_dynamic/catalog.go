@@ -63,10 +63,11 @@ type sortDirective struct {
 }
 
 // buildTableSpecs 从 Catalog 构建生成范围(§5.1/§5.3)。
-func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, error) {
+// 第二返回值是 deprecation 提示(旧指令名使用,按列去重),由入口输出到 stderr。
+func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, []string, error) {
 	schema := findSchema(req.Catalog, opts.Schema)
 	if schema == nil {
-		return nil, fmt.Errorf("schema %q not found in catalog", opts.Schema)
+		return nil, nil, fmt.Errorf("schema %q not found in catalog", opts.Schema)
 	}
 	// 枚举名 → 值列表。
 	enums := enumMap(schema)
@@ -74,11 +75,13 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, erro
 	// 逐表解析注释 DSL。
 	byName := map[string]*TableSpec{}
 	var order []*TableSpec
+	var deprecations []string
 	for _, table := range schema.Tables {
-		spec, included, err := buildTable(table, schema.Name, opts, enums)
+		spec, included, deps, err := buildTable(table, schema.Name, opts, enums)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		deprecations = append(deprecations, deps...)
 		if !included {
 			continue
 		}
@@ -92,7 +95,7 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, erro
 		for _, want := range opts.Tables {
 			spec, ok := byName[want]
 			if !ok {
-				return nil, fmt.Errorf("table %q listed in options not found in schema %q (or it has no dynamic declarations and no @pk)", want, opts.Schema)
+				return nil, nil, fmt.Errorf("table %q listed in options not found in schema %q (or it has no dynamic declarations and no @pk)", want, opts.Schema)
 			}
 			picked = append(picked, spec)
 		}
@@ -101,13 +104,13 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, erro
 
 	for _, spec := range order {
 		if err := validateTable(spec); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if len(order) == 0 {
-		return nil, fmt.Errorf("no tables selected for dynamic generation in schema %q (opt a table in via table comment [@pk: <col>], any column [@dynamic: ...], or options.tables)", opts.Schema)
+		return nil, nil, fmt.Errorf("no tables selected for dynamic generation in schema %q (opt a table in via table comment [@pk: <col>], any column [@dynamic: ...], or options.tables)", opts.Schema)
 	}
-	return order, nil
+	return order, deprecations, nil
 }
 
 func findSchema(catalog *pb.Catalog, name string) *pb.Schema {
@@ -131,15 +134,19 @@ func enumMap(schema *pb.Schema) map[string][]string {
 }
 
 // buildTable 解析单表;included=false 表示该表无动态声明且未被点名。
-func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[string][]string) (*TableSpec, bool, error) {
+// 第三返回值是本表的 deprecation 提示(旧指令名使用)。
+func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[string][]string) (*TableSpec, bool, []string, error) {
+	var deprecations []string
 	tableWhere := fmt.Sprintf("table %s", table.Rel.Name)
 	_, tableTags, err := parseComment(tableWhere, table.Comment)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
+	tableTags, tableDeps := normalizeTagNames(tableTags)
 	tableTags = mergeTags(tableTags)
+	deprecations = append(deprecations, tableDeps...)
 	if err := validateTagNames(tableWhere, "table", tableTags); err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 
 	spec := &TableSpec{
@@ -156,11 +163,15 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		colWhere := fmt.Sprintf("column %s.%s", table.Rel.Name, col.Name)
 		label, tags, err := parseComment(colWhere, col.Comment)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil, err
+		}
+		tags, colDeps := normalizeTagNames(tags)
+		for _, d := range colDeps {
+			deprecations = append(deprecations, colWhere+": "+d)
 		}
 		tags = mergeTags(tags)
 		if err := validateTagNames(colWhere, "column", tags); err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 
 		c := ColumnSpec{
@@ -179,21 +190,21 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 
 		dynTag, hasDyn := findTag(tags, "dynamic")
 		_, sortableTag := findTag(tags, "sortable")
-		_, hiddenTag := findTag(tags, "hidden")
-		_, selectableTag := findTag(tags, "selectable")
+		_, internalTag := findTag(tags, "internal")
+		_, hideableTag := findTag(tags, "hideable")
 		_, hasAPI := findTag(tags, "api")
 
-		// @hidden 与任一正向标记组合 → 生成期 fail。
-		if hiddenTag && (hasDyn || sortableTag || selectableTag || hasAPI) {
-			return nil, false, fmt.Errorf("%s: @hidden cannot be combined with @dynamic/@sortable/@selectable/@api", colWhere)
+		// @internal 与任一正向标记组合 → 生成期 fail。
+		if internalTag && (hasDyn || sortableTag || hideableTag || hasAPI) {
+			return nil, false, nil, fmt.Errorf("%s: @internal cannot be combined with @dynamic/@sortable/@hideable/@api", colWhere)
 		}
-		c.Hidden = hiddenTag
+		c.Hidden = internalTag
 		c.Sortable = sortableTag
-		c.Selectable = selectableTag
+		c.Selectable = hideableTag
 
 		dataType, goType, err := resolveType(colWhere, col, enums, opts, &c)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		c.DataType = dataType
 		c.GoType = goType
@@ -203,21 +214,21 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 			hasDynamicDecl = true
 			ops, err := expandDynamicItems(colWhere, dataType, dynTag.Payload, c.Nullable)
 			if err != nil {
-				return nil, false, err
+				return nil, false, nil, err
 			}
 			c.Ops = ops
 			c.Directives = append(c.Directives, fmt.Sprintf("@dynamic: %s", strings.Join(ops, ", ")))
 		} else if !c.Hidden && opts.DefaultOps != "none" && dataType != "unmapped" {
 			ops, err := expandDynamicItems(colWhere, dataType, opts.DefaultOps, c.Nullable)
 			if err != nil {
-				return nil, false, err
+				return nil, false, nil, err
 			}
 			c.Ops = ops
 		}
-		for _, name := range []string{"sortable", "hidden", "selectable"} {
+		for _, name := range []string{"sortable", "internal", "hideable"} {
 			if t, ok := findTag(tags, name); ok {
 				if t.Payload != "" {
-					return nil, false, fmt.Errorf("%s: @%s takes no payload, got %q", colWhere, name, t.Payload)
+					return nil, false, nil, fmt.Errorf("%s: @%s takes no payload, got %q", colWhere, name, t.Payload)
 				}
 				c.Directives = append(c.Directives, "@"+name)
 			}
@@ -226,12 +237,12 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		if t, ok := findTag(tags, "api"); ok {
 			api, err := parseAPIDirective(colWhere, t)
 			if err != nil {
-				return nil, false, err
+				return nil, false, nil, err
 			}
 			switch dataType {
 			case "integer", "uuid", "string":
 			default:
-				return nil, false, fmt.Errorf("%s: @api not supported for dataType %s (want integer|uuid|string reference fields)", colWhere, dataType)
+				return nil, false, nil, fmt.Errorf("%s: @api not supported for dataType %s (want integer|uuid|string reference fields)", colWhere, dataType)
 			}
 			c.API = api
 			directive := fmt.Sprintf("@api: %s value_key=%s label_key=%s", api.Endpoint, api.ValueKey, api.LabelKey)
@@ -248,7 +259,7 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 	if t, ok := findTag(tableTags, "page"); ok {
 		def, max, err := parsePageDirective(tableWhere, t)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		spec.PageDefault, spec.PageMax = def, max
 		spec.TableDirectives = append(spec.TableDirectives, fmt.Sprintf("@page: %d/%d", def, max))
@@ -256,14 +267,14 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 	if t, ok := findTag(tableTags, "default_sort"); ok {
 		column, desc, err := parseDefaultSortDirective(tableWhere, t)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		spec.DefaultSort = append(spec.DefaultSort, sortDirective{Column: column, Desc: desc})
 		spec.TableDirectives = append(spec.TableDirectives, fmt.Sprintf("@default_sort: %s %s", column, dirName(desc)))
 	}
 	if t, ok := findTag(tableTags, "pk"); ok {
 		if t.Payload == "" || strings.ContainsAny(t.Payload, " /") {
-			return nil, false, fmt.Errorf("%s: @pk wants a single column name, got %q", tableWhere, t.Payload)
+			return nil, false, nil, fmt.Errorf("%s: @pk wants a single column name, got %q", tableWhere, t.Payload)
 		}
 		spec.Tiebreaker = camelKey(t.Payload)
 		spec.TableDirectives = append(spec.TableDirectives, "@pk: "+t.Payload)
@@ -271,13 +282,13 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 	if t, ok := findTag(tableTags, "scope"); ok {
 		guards, err := parseScopeDirective(tableWhere, t)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		spec.Scope = guards
 		spec.TableDirectives = append(spec.TableDirectives, "@scope: "+scopeEcho(guards))
 		params, err := scopeParamsOf(tableWhere, guards)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		spec.ScopeParams = params
 	}
@@ -292,7 +303,7 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 			}
 		}
 	}
-	return spec, included, nil
+	return spec, included, deprecations, nil
 }
 
 func dirName(desc bool) string {
@@ -385,7 +396,7 @@ func validateTable(spec *TableSpec) error {
 			continue
 		}
 		if c.Hidden {
-			return fmt.Errorf("table %s: @pk column %q must not be @hidden (it is force-merged into projection and cursor)", spec.Name, c.Physical)
+			return fmt.Errorf("table %s: @pk column %q must not be @internal (it is force-merged into projection and cursor)", spec.Name, c.Physical)
 		}
 		if c.Nullable {
 			return fmt.Errorf("table %s: @pk column %q must be NOT NULL (seek predicate degenerates only for non-null tiebreaker)", spec.Name, c.Physical)
@@ -395,7 +406,7 @@ func validateTable(spec *TableSpec) error {
 		}
 	}
 
-	// @default_sort 目标必须存在、已声明 @sortable 且非 @hidden。
+	// @default_sort 目标必须存在、已声明 @sortable 且非 @internal。
 	for _, ds := range spec.DefaultSort {
 		found := false
 		for _, c := range spec.Columns {
@@ -404,7 +415,7 @@ func validateTable(spec *TableSpec) error {
 			}
 			found = true
 			if c.Hidden {
-				return fmt.Errorf("table %s: @default_sort target %q is @hidden", spec.Name, ds.Column)
+				return fmt.Errorf("table %s: @default_sort target %q is @internal", spec.Name, ds.Column)
 			}
 			if !c.Sortable {
 				return fmt.Errorf("table %s: @default_sort target %q must declare @sortable", spec.Name, ds.Column)
@@ -418,7 +429,7 @@ func validateTable(spec *TableSpec) error {
 		}
 	}
 
-	// @scope 目标列必须存在;不与列能力矩阵耦合——scope 列可以 @hidden、
+	// @scope 目标列必须存在;不与列能力矩阵耦合——scope 列可以 @internal、
 	// 可以无 @dynamic、可以是任意 PG 类型(类型契约由守卫函数返回形态保证:
 	// in 为单列集合且类型一致,eq/比较类为标量且可比较)。
 	for _, g := range spec.Scope {

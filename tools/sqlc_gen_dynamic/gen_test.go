@@ -160,19 +160,29 @@ func TestGenerateDSLFailures(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "hidden_combined_with_dynamic",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@dynamic: exact @hidden]") },
-			wantErr: "@hidden cannot be combined",
+			name:    "internal_combined_with_dynamic",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@dynamic: exact @internal]") },
+			wantErr: "@internal cannot be combined",
 		},
 		{
-			name:    "hidden_combined_with_sortable",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@sortable @hidden]") },
-			wantErr: "@hidden cannot be combined",
+			name:    "hidden_alias_combined_with_dynamic",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@dynamic: exact @hidden]") },
+			wantErr: "@internal cannot be combined",
+		},
+		{
+			name:    "internal_combined_with_sortable",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@sortable @internal]") },
+			wantErr: "@internal cannot be combined",
 		},
 		{
 			name:    "unknown_tag",
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@sortble]") },
 			wantErr: "unknown directive @sortble",
+		},
+		{
+			name:    "unknown_tag_lists_new_names_only",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@selectablee]") },
+			wantErr: "allowed for column: @api, @dynamic, @hideable, @internal, @sortable",
 		},
 		{
 			name:    "unknown_column_scope_tag",
@@ -207,12 +217,12 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: "must declare @sortable",
 		},
 		{
-			name: "default_sort_target_hidden",
+			name: "default_sort_target_internal",
 			mutate: func(r *pb.GenerateRequest) {
 				setTableComment(r, "users", "用户表 [@default_sort: id DESC @pk: id]")
-				setComment(r, "users", "id", "ID [@hidden]")
+				setComment(r, "users", "id", "ID [@internal]")
 			},
-			wantErr: "must not be @hidden",
+			wantErr: "must not be @internal",
 		},
 		{
 			name: "default_sort_direction_missing",
@@ -294,11 +304,11 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: "@api not supported for dataType datetime",
 		},
 		{
-			name: "api_hidden_combined",
+			name: "api_internal_combined",
 			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "orders", "user_id", "用户ID [@api: /users/options value_key=id label_key=name @hidden]")
+				setComment(r, "orders", "user_id", "用户ID [@api: /users/options value_key=id label_key=name @internal]")
 			},
-			wantErr: "@hidden cannot be combined",
+			wantErr: "@internal cannot be combined",
 		},
 		{
 			name: "api_unknown_key",
@@ -433,6 +443,81 @@ func TestGenerateDSLFailures(t *testing.T) {
 				t.Fatalf("want error containing %q, got: %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+// TestDeprecatedDirectiveAliases 覆盖指令更名的兼容路径(@hidden → @internal、
+// @selectable → @hideable,见 dsl.go deprecatedDirectives):
+//   - 旧名 @hidden / @selectable 解析为等价新名,生成物与新名逐字节一致;
+//   - 旧名触发 deprecation 提示(按列去重),新名零提示;
+//   - 同列新旧名并存时静默合并(别名等价),@hidden 提示至多一条。
+func TestDeprecatedDirectiveAliases(t *testing.T) {
+	oldReq := loadGoldenRequest(t)
+	setComment(oldReq, "users", "password", "密码 [@hidden]")
+	setComment(oldReq, "users", "id", "ID [@selectable]")
+
+	newReq := loadGoldenRequest(t)
+	setComment(newReq, "users", "password", "密码 [@internal]")
+	setComment(newReq, "users", "id", "ID [@hideable]")
+
+	opts, err := ParseOptions(oldReq)
+	if err != nil {
+		t.Fatalf("ParseOptions: %v", err)
+	}
+
+	// 旧名:提示按列去重,内容指向新名与移除版本。
+	_, warns, err := buildTableSpecs(oldReq, opts)
+	if err != nil {
+		t.Fatalf("buildTableSpecs (old names): %v", err)
+	}
+	wantWarns := []string{
+		"column users.id: @selectable is deprecated, use @hideable instead (the old name will be removed in v0.6.0)",
+		"column users.password: @hidden is deprecated, use @internal instead (the old name will be removed in v0.6.0)",
+	}
+	if len(warns) != len(wantWarns) {
+		t.Fatalf("want %d deprecations, got %d: %v", len(wantWarns), len(warns), warns)
+	}
+	for i, w := range wantWarns {
+		if warns[i] != w {
+			t.Errorf("deprecation[%d]:\n got  %s\n want %s", i, warns[i], w)
+		}
+	}
+
+	// 新名:零提示。
+	if _, warnsNew, err := buildTableSpecs(newReq, opts); err != nil {
+		t.Fatalf("buildTableSpecs (new names): %v", err)
+	} else if len(warnsNew) != 0 {
+		t.Errorf("new names must not trigger deprecations, got %v", warnsNew)
+	}
+
+	// 同列新旧名并存:归一后由 mergeTags 静默合并,@hidden 提示至多一条。
+	bothReq := loadGoldenRequest(t)
+	setComment(bothReq, "users", "password", "密码 [@hidden @internal]")
+	if _, warnsBoth, err := buildTableSpecs(bothReq, opts); err != nil {
+		t.Fatalf("buildTableSpecs (mixed names): %v", err)
+	} else if len(warnsBoth) != 1 || !strings.Contains(warnsBoth[0], "column users.password: @hidden is deprecated") {
+		t.Errorf("mixed names want exactly one @hidden deprecation, got %v", warnsBoth)
+	}
+
+	// 解析等价:旧名与新名的生成物逐字节一致(回显已归一为新名)。
+	oldResp, err := Generate(context.Background(), oldReq)
+	if err != nil {
+		t.Fatalf("Generate (old names): %v", err)
+	}
+	newResp, err := Generate(context.Background(), newReq)
+	if err != nil {
+		t.Fatalf("Generate (new names): %v", err)
+	}
+	if len(oldResp.Files) != len(newResp.Files) {
+		t.Fatalf("file count mismatch: %d vs %d", len(oldResp.Files), len(newResp.Files))
+	}
+	for i := range oldResp.Files {
+		if oldResp.Files[i].Name != newResp.Files[i].Name {
+			t.Fatalf("file name mismatch: %s vs %s", oldResp.Files[i].Name, newResp.Files[i].Name)
+		}
+		if string(oldResp.Files[i].Contents) != string(newResp.Files[i].Contents) {
+			t.Errorf("%s: old-name and new-name outputs must be byte-identical", oldResp.Files[i].Name)
+		}
 	}
 }
 

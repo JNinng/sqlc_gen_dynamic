@@ -77,7 +77,7 @@ var audit_logsFieldIndex = map[dynq.FieldName]int{
 }
 
 // AuditLogField 提供逻辑字段常量,供禁用选项、OrderBy 与 SelectFields 引用。
-// 字段名拼写错误将在编译期被捕获;@hidden 列不提供常量。
+// 字段名拼写错误将在编译期被捕获;@internal 列不提供常量。
 var AuditLogField = struct {
 	ID        dynq.FieldName
 	ActorID   dynq.FieldName
@@ -101,7 +101,7 @@ var AuditLogField = struct {
 type ListAuditLogsParams struct {
 	// OrderBy 指定排序(逻辑字段名与方向);为 nil 时回落表级 @default_sort。
 	OrderBy []dynq.OrderBy
-	// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @hidden 列)。
+	// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @internal 列)。
 	SelectFields []dynq.FieldName
 	// Limit 为 offset 模式的每页条数,为 0 时使用表级默认 pageSize。
 	Limit uint32
@@ -129,7 +129,7 @@ func ParseAuditLogsQuery(q *dynq.Query, opts ...dynq.QueryOption) (ListAuditLogs
 	var out ListAuditLogsParams
 	budget := dynq.NewBudget()
 
-	// 解析投影字段:显式空数组、@hidden 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。
+	// 解析投影字段:显式空数组、@internal 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。
 	selectFields, err := dynq.ParseSelectFields(q.Fields, cfg, audit_logsRegistry)
 	if err != nil {
 		return out, err

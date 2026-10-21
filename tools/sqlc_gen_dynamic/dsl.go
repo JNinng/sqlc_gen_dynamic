@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -11,7 +12,8 @@ import (
 // 注释 DSL(§5.2/§5.3):指令必须包裹在 [ ] 中且内容以 @ 起始;
 // 不以 @ 起始的方括号是 label 字面文本(人类注释方括号不误伤)。
 //
-// 列级:<label> [@dynamic: <项,项,...>] [@sortable] [@hidden] [@selectable]
+// 列级:<label> [@dynamic: <项,项,...>] [@sortable] [@internal] [@hideable]
+//       (@hidden / @selectable 为弃用旧名,解析期等价归一,见 deprecatedDirectives)
 //       [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]
 // 表级:[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>]
 //       [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...]
@@ -110,35 +112,63 @@ func parseDirectiveBlock(block string) ([]dslTag, error) {
 	return tags, nil
 }
 
+// deprecatedDirectives 是弃用旧名 → 等价新名的别名表(兼容期):
+// @hidden → @internal(服务端内部列,协议面全排除);
+// @selectable → @hideable(列头可显隐交互,纯 UI 提示)。
+// 旧名继续解析为等价能力,但生成期输出 deprecation 提示。
+var deprecatedDirectives = map[string]string{"hidden": "internal", "selectable": "hideable"}
+
+// deprecationRemovalVersion 是弃用旧名计划移除的版本(提示与文档共用同一口径)。
+const deprecationRemovalVersion = "v0.6.0"
+
+// normalizeTagNames 把弃用旧名归一为等价新名,并按声明序返回去重后的
+// deprecation 提示(每个旧名至多一条,由调用方附加上下文)。归一在 mergeTags
+// 之前执行:同列新旧名并存时静默合并为一条——别名等价,不是冲突。
+func normalizeTagNames(tags []dslTag) ([]dslTag, []string) {
+	out := make([]dslTag, len(tags))
+	warned := map[string]bool{}
+	var warns []string
+	for i, t := range tags {
+		if newName, dep := deprecatedDirectives[t.Name]; dep {
+			if !warned[t.Name] {
+				warned[t.Name] = true
+				warns = append(warns, fmt.Sprintf("@%s is deprecated, use @%s instead (the old name will be removed in %s)",
+					t.Name, newName, deprecationRemovalVersion))
+			}
+			t.Name = newName
+		}
+		out[i] = t
+	}
+	return out, warns
+}
+
 // validateTagNames 校验指令名在作用域白名单内,杜绝静默忽略导致的能力丢失。
+// 白名单含兼容期旧名,但报错文案只列新名——旧名可解析,不应再写进新 DDL。
 func validateTagNames(where, scope string, tags []dslTag) error {
 	var allowed map[string]bool
 	if scope == "column" {
-		allowed = map[string]bool{"dynamic": true, "sortable": true, "hidden": true, "selectable": true, "api": true}
+		allowed = map[string]bool{
+			"dynamic": true, "sortable": true, "internal": true, "hideable": true, "api": true,
+			"hidden": true, "selectable": true, // 弃用旧名(兼容期别名)
+		}
 	} else {
 		allowed = map[string]bool{"default_sort": true, "page": true, "pk": true, "scope": true}
 	}
 	for _, t := range tags {
 		if !allowed[t.Name] {
+			var names []string
+			for name := range allowed {
+				if _, dep := deprecatedDirectives[name]; dep {
+					continue
+				}
+				names = append(names, "@"+name)
+			}
+			sort.Strings(names) // 排序保证报错信息稳定
 			return fmt.Errorf("%s: unknown directive @%s (allowed for %s: %s)",
-				where, t.Name, scope, strings.Join(sortedKeys(allowed), ", "))
+				where, t.Name, scope, strings.Join(names, ", "))
 		}
 	}
 	return nil
-}
-
-func sortedKeys(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, "@"+k)
-	}
-	// 简单排序保证报错信息稳定。
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
-	return keys
 }
 
 // mergeTags 同名指令去重(声明一次等价),不同指令块按出现顺序合并。
@@ -240,7 +270,7 @@ func parseAPIDirective(where string, t dslTag) (*APISpec, error) {
 }
 
 // parseDefaultSortDirective 解析 @default_sort: "<column> <ASC|DESC>"。
-// 目标列为物理列名;存在性、@sortable、非 @hidden 在表级校验。
+// 目标列为物理列名;存在性、@sortable、非 @internal 在表级校验。
 func parseDefaultSortDirective(where string, t dslTag) (column string, desc bool, err error) {
 	parts := strings.Fields(t.Payload)
 	if len(parts) != 2 {

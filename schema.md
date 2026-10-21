@@ -7,7 +7,7 @@
 - 设计原理与 UI 推断 → 见 [desc.md §10](./desc.md)
 
 - **交付端点**:`GET /{resource}/_query-schema`;`ResourceSchema.Hash()` 为内容 hash,可作 ETag 长缓存(同一 opts 切片产出字节级相同 schema)
-- **能力减法**:与 Parse 完全相同的 opts 语义——where 禁用 → 该字段 `ops` 清空;sort 禁用 → `sortable=false`;select 禁用 → `selectable=false`;字段被完全禁用(或原 `@hidden`)→ 从 schema 消失,QueryBuilder 无需感知"禁用"概念
+- **能力减法**:与 Parse 完全相同的 opts 语义——where 禁用 → 该字段 `ops` 清空;sort 禁用 → `sortable=false`;select 禁用 → `hideable=false`;字段被完全禁用(或原 `@internal`)→ 从 schema 消失,QueryBuilder 无需感知"禁用"概念
 
 ## 资源级键(ResourceSchema)
 
@@ -27,12 +27,13 @@
 | `dataType` | string(枚举) | `integer` / `number` / `datetime` / `date` / `string` / `boolean` / `uuid` / `enum` / `jsonb` / `int_array` |
 | `nullable` | boolean | 列可空性 |
 | `sortable` | boolean | 可排序 → 表格列头可挂排序 |
-| `selectable` | boolean | 纯 UI 提示:列头渲染与显隐交互(见 `@selectable`) |
+| `hideable` | boolean | 纯 UI 提示:列头渲染与显隐交互(见 `@hideable`,DSL 旧名 `@selectable`) |
+| `selectable` | boolean | **过渡期旧键(弃用)**:`hideable` 更名前的旧键,过渡期与 `hideable` 恒同值输出;前端切换到 `hideable` 后于大版本移除,新代码不得依赖 |
 | `ops` | string[] | 本调用点有效的 where 操作符全集(能力上限 = 生成期 DSL;**操作符渲染的唯一事实源**,见下方渲染规则) |
 | `enum` | string[](可选) | 枚举值列表(仅 `enum` 类型,下拉组件的 options 取自此;编译期可确定时用,静态) |
 | `api` | object(可选) | 选项数据源为远程接口(`@api` 声明);有 `api` 时值控件 options 经接口拉取,`enum` 不出现。见下方 @api 契约 |
 
-> schema **不携带 `ui` 字段**:控件族由 `dataType` 唯一确定(映射表见下方渲染规则),操作符与值控件形态由 `ops` 驱动——渲染信息全部可由 `(dataType, ops, sortable, selectable)` 派生,不做第二份副本。
+> schema **不携带 `ui` 字段**:控件族由 `dataType` 唯一确定(映射表见下方渲染规则),操作符与值控件形态由 `ops` 驱动——渲染信息全部可由 `(dataType, ops, sortable, hideable)` 派生,不做第二份副本。
 
 ## pagination 键
 
@@ -45,7 +46,7 @@
 
 ## 前端渲染规则(契约,固化于 [desc.md §10.2](./desc.md#102-前端渲染规则契约固化进文档))
 
-前端 QueryBuilder 依据 `(dataType, ops, sortable, selectable)` 渲染,控件族由 `dataType` 唯一确定:
+前端 QueryBuilder 依据 `(dataType, ops, sortable, hideable)` 渲染,控件族由 `dataType` 唯一确定:
 
 - **操作符下拉**:状态 = 同层 `ops` 中除 `is_null` / `not_null` 的全部 op(该两类为 API-only,不渲染)。字段仅 1 个 op 时不渲染下拉。
 - **值控件形态由所选 op 决定**:`between` → 双控件(区间);`in` / `not_in` → 多值输入;其余 → 单值输入。
@@ -101,6 +102,7 @@
       "dataType": "string",
       "nullable": false,
       "sortable": true,
+      "hideable": true,
       "selectable": true,
       "ops": ["contains", "prefix", "suffix", "eq", "neq"]
     },

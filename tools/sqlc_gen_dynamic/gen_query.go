@@ -71,7 +71,7 @@ func (tc *tableCode) parseSection() string {
 	}
 	b.WriteString("\tbudget := dynq.NewBudget()\n\n")
 	// fields
-	b.WriteString("\t// 解析投影字段:显式空数组、@hidden 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。\n")
+	b.WriteString("\t// 解析投影字段:显式空数组、@internal 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。\n")
 	fmt.Fprintf(&b, "\tselectFields, err := dynq.ParseSelectFields(q.Fields, cfg, %sRegistry)\n", tc.reg)
 	b.WriteString("\tif err != nil {\n\t\treturn out, err\n\t}\n")
 	b.WriteString("\tout.SelectFields = selectFields\n\n")

@@ -1,9 +1,9 @@
 package dynq
 
 // ParseSelectFields 解析协议门的 fields 数组:
-//   - nil(缺省)= 默认全量投影(所有非 @hidden 列),由 SelectColumns 体现;
+//   - nil(缺省)= 默认全量投影(所有非 @internal 列),由 SelectColumns 体现;
 //   - 显式空数组 → 拒绝(与缺省语义二分);
-//   - 仅可点名白名单内字段:未知 → 400;@hidden → 400;select 域禁用 → 400;
+//   - 仅可点名白名单内字段:未知 → 400;@internal → 400;select 域禁用 → 400;
 //   - 重复元素去重保序。
 func ParseSelectFields(raw []string, cfg *QueryConfig, meta TableMeta) ([]FieldName, error) {
 	if raw == nil {
@@ -71,7 +71,7 @@ func SelectColumns(meta TableMeta, selectFields []FieldName, seq []SortField) []
 	return cols
 }
 
-// ValidateTypedSelectFields 是 typed 门的等价校验:SelectFields 含禁用、@hidden
+// ValidateTypedSelectFields 是 typed 门的等价校验:SelectFields 含禁用、@internal
 // 或未知字段 → error。
 func ValidateTypedSelectFields(selectFields []FieldName, cfg *QueryConfig, meta TableMeta) error {
 	for i, key := range selectFields {

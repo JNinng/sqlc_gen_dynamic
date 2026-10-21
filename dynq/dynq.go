@@ -78,8 +78,8 @@ type FieldMeta struct {
 	Nullable   bool
 	Ops        []Op // where 能力(生成期白名单,运行期只做减法)
 	Sortable   bool
-	Selectable bool // 纯 UI 提示:服务端 fields 点名白名单 = 全部非 @hidden 列
-	Hidden     bool // @hidden 全能力排除
+	Selectable bool // 纯 UI 提示:服务端 fields 点名白名单 = 全部非 @internal 列(由 @hideable 声明,旧名 @selectable)
+	Hidden     bool // @internal 全能力排除(旧名 @hidden 已弃用)
 	Enum       []string
 	// Cast 是 seek 谓词占位符的显式 cast 后缀(如 "::uuid"),用于文本形态参数
 	// 与 uuid/enum 列的空值安全等值比较;空 = 无需 cast。

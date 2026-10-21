@@ -5,20 +5,20 @@
 //	table users: [@page: 20/200]
 //	table users: [@default_sort: created_at DESC]
 //	table users: [@pk: id]
-//	column users.id: [@dynamic: eq, neq, in, not_in @sortable @selectable]
-//	column users.name: [@dynamic: contains, prefix, suffix, eq, neq @sortable @selectable]
-//	column users.email: [@dynamic: eq, neq, in, not_in, prefix @selectable]
-//	column users.password: [@hidden]
-//	column users.status: [@dynamic: eq, neq, in, not_in @sortable @selectable]
+//	column users.id: [@dynamic: eq, neq, in, not_in @sortable @hideable]
+//	column users.name: [@dynamic: contains, prefix, suffix, eq, neq @sortable @hideable]
+//	column users.email: [@dynamic: eq, neq, in, not_in, prefix @hideable]
+//	column users.password: [@internal]
+//	column users.status: [@dynamic: eq, neq, in, not_in @sortable @hideable]
 //	column users.role: [@dynamic: contains, prefix, suffix @sortable]
-//	column users.age: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @selectable]
-//	column users.score: [@dynamic: gt, gte, lt, lte, between @sortable @selectable]
-//	column users.balance: [@dynamic: gt, gte, lt, lte, between @selectable]
-//	column users.birth_date: [@dynamic: eq, gt, gte, lt, lte, between @selectable]
+//	column users.age: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @hideable]
+//	column users.score: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
+//	column users.balance: [@dynamic: gt, gte, lt, lte, between @hideable]
+//	column users.birth_date: [@dynamic: eq, gt, gte, lt, lte, between @hideable]
 //	column users.org_id: [@dynamic: eq, neq, in, not_in]
-//	column users.tags: [@dynamic: in @selectable]
+//	column users.tags: [@dynamic: in @hideable]
 //	column users.meta: [@dynamic: has]
-//	column users.created_at: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @selectable]
+//	column users.created_at: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @hideable]
 //	column users.updated_at: [@dynamic: gt, gte, lt, lte, between, is_null, not_null @sortable]
 //	column users.deleted_at: [@dynamic: is_null, not_null]
 //
@@ -252,7 +252,7 @@ var usersFieldIndex = map[dynq.FieldName]int{
 var usersStatusEnumVals = []string{"active", "inactive", "banned"}
 
 // UserField 提供逻辑字段常量,供禁用选项、OrderBy 与 SelectFields 引用。
-// 字段名拼写错误将在编译期被捕获;@hidden 列不提供常量。
+// 字段名拼写错误将在编译期被捕获;@internal 列不提供常量。
 var UserField = struct {
 	ID        dynq.FieldName
 	Name      dynq.FieldName
@@ -362,7 +362,7 @@ type ListUsersParams struct {
 	DeletedAtNotNull bool
 	// OrderBy 指定排序(逻辑字段名与方向);为 nil 时回落表级 @default_sort。
 	OrderBy []dynq.OrderBy
-	// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @hidden 列)。
+	// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @internal 列)。
 	SelectFields []dynq.FieldName
 	// Limit 为 offset 模式的每页条数,为 0 时使用表级默认 pageSize。
 	Limit uint32
@@ -391,7 +391,7 @@ func ParseUsersQuery(q *dynq.Query, opts ...dynq.QueryOption) (ListUsersParams, 
 	slots := dynq.NewSlots()
 	budget := dynq.NewBudget()
 
-	// 解析投影字段:显式空数组、@hidden 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。
+	// 解析投影字段:显式空数组、@internal 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。
 	selectFields, err := dynq.ParseSelectFields(q.Fields, cfg, usersRegistry)
 	if err != nil {
 		return out, err

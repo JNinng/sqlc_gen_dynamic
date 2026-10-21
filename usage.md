@@ -48,7 +48,9 @@ plugins:
 go install github.com/jninng/sqlc_gen_dynamic/tools/sqlc_gen_dynamic@vX.Y.Z
 
 # 或本仓源码构建(本仓开发态即此形态,make sqlc 的第一步)
-go build -o bin/sqlc_gen_dynamic ./tools/sqlc_gen_dynamic
+go build -o bin/sqlc_gen_dynamic ./tools/sqlc_gen_dynamic      # Linux/macOS
+go build -o bin/sqlc_gen_dynamic.exe ./tools/sqlc_gen_dynamic  # Windows:必须带 .exe,
+                                                               # 否则 sqlc process 插件报 not found
 ```
 
 ### sql 块(两形态相同)
@@ -83,7 +85,7 @@ sql:
           page_max: 200
 ```
 
-动态表声明写在 schema.sql 的 `COMMENT ON` 中(列级 `@dynamic` / `@sortable` / `@selectable` / `@hidden` / `@api`,表级 `@default_sort` / `@page` / `@pk` / `@scope`);DSL 语法、能力矩阵、预设展开与 fail 条件全集见 [dsl.md](./dsl.md),非法声明为生成期 fail,报错定位到具体列。
+动态表声明写在 schema.sql 的 `COMMENT ON` 中(列级 `@dynamic` / `@sortable` / `@hideable` / `@internal` / `@api`,表级 `@default_sort` / `@page` / `@pk` / `@scope`;旧名 `@selectable` / `@hidden` 为兼容期别名,生成期有 deprecation 提示);DSL 语法、能力矩阵、预设展开与 fail 条件全集见 [dsl.md](./dsl.md),非法声明为生成期 fail,报错定位到具体列。
 
 ### codegen options
 

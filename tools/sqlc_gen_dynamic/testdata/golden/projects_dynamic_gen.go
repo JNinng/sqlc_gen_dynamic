@@ -6,11 +6,11 @@
 //	table projects: [@default_sort: created_at DESC]
 //	table projects: [@pk: id]
 //	table projects: [@scope: tenant_id eq fn_tenant_id(user_id:varchar)]
-//	column projects.id: [@dynamic: eq, neq @sortable @selectable]
-//	column projects.name: [@dynamic: contains, prefix, suffix @sortable @selectable]
-//	column projects.tenant_id: [@hidden]
-//	column projects.owner_user_id: [@hidden]
-//	column projects.created_at: [@dynamic: gt, gte, lt, lte, between @sortable @selectable]
+//	column projects.id: [@dynamic: eq, neq @sortable @hideable]
+//	column projects.name: [@dynamic: contains, prefix, suffix @sortable @hideable]
+//	column projects.tenant_id: [@internal]
+//	column projects.owner_user_id: [@internal]
+//	column projects.created_at: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
 //
 // 逻辑键(camelCase)是对外契约;snake_case 物理列名仅在本文件内部使用。
 package gen
@@ -103,7 +103,7 @@ var projectsFieldIndex = map[dynq.FieldName]int{
 }
 
 // ProjectField 提供逻辑字段常量,供禁用选项、OrderBy 与 SelectFields 引用。
-// 字段名拼写错误将在编译期被捕获;@hidden 列不提供常量。
+// 字段名拼写错误将在编译期被捕获;@internal 列不提供常量。
 var ProjectField = struct {
 	ID        dynq.FieldName
 	Name      dynq.FieldName
@@ -146,7 +146,7 @@ type ListProjectsParams struct {
 	Scope *ProjectsScope
 	// OrderBy 指定排序(逻辑字段名与方向);为 nil 时回落表级 @default_sort。
 	OrderBy []dynq.OrderBy
-	// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @hidden 列)。
+	// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @internal 列)。
 	SelectFields []dynq.FieldName
 	// Limit 为 offset 模式的每页条数,为 0 时使用表级默认 pageSize。
 	Limit uint32
@@ -175,7 +175,7 @@ func ParseProjectsQuery(q *dynq.Query, opts ...dynq.QueryOption) (ListProjectsPa
 	slots := dynq.NewSlots()
 	budget := dynq.NewBudget()
 
-	// 解析投影字段:显式空数组、@hidden 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。
+	// 解析投影字段:显式空数组、@internal 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。
 	selectFields, err := dynq.ParseSelectFields(q.Fields, cfg, projectsRegistry)
 	if err != nil {
 		return out, err

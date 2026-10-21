@@ -21,13 +21,17 @@ type FieldAPI struct {
 // FieldSchema 是 schema 中的单个字段契约。
 // 不携带 ui 字段:控件族由 data_type 唯一确定(映射表见 schema.md/desc §10.2),
 // 操作符渲染的唯一事实源是同层 ops——所有渲染信息均可由
-// (data_type, ops, sortable, selectable) 派生,不再生成第二份副本。
+// (data_type, ops, sortable, hideable) 派生,不再生成第二份副本。
 type FieldSchema struct {
-	Field      string    `json:"field"`
-	Label      string    `json:"label"`
-	DataType   string    `json:"dataType"`
-	Nullable   bool      `json:"nullable"`
-	Sortable   bool      `json:"sortable"`
+	Field    string `json:"field"`
+	Label    string `json:"label"`
+	DataType string `json:"dataType"`
+	Nullable bool   `json:"nullable"`
+	Sortable bool   `json:"sortable"`
+	// Hideable 是列头可显隐交互提示(@hideable 声明),schema 键的主名。
+	Hideable bool `json:"hideable"`
+	// Selectable 是 hideable 的过渡期旧键(同名能力由 @selectable 更名而来),
+	// 与 Hideable 恒同值输出;与前端约定切换后于大版本移除,新代码不得依赖。
 	Selectable bool      `json:"selectable"`
 	Ops        []string  `json:"ops"`
 	Enum       []string  `json:"enum,omitempty"`
@@ -70,7 +74,7 @@ type ResourceSchema struct {
 // BuildSchema 由 registry 与 QueryConfig 产出前端 schema。
 // 与 registry 由同一模板循环产出,再经 opts 做与 Parse 完全相同的减法投影:
 // where 禁用 → 该字段 op 集清空;sort 禁用 → sortable = false;select 禁用 →
-// selectable = false;字段被完全禁用(或原 @hidden)则不出现在 schema 中。
+// hideable = false;字段被完全禁用(或原 @internal)则不出现在 schema 中。
 // 同一 opts 切片产出字节级相同的 schema(确定性纯函数)。
 func BuildSchema(meta TableMeta, cfg *QueryConfig) ResourceSchema {
 	s := ResourceSchema{
@@ -98,7 +102,8 @@ func BuildSchema(meta TableMeta, cfg *QueryConfig) ResourceSchema {
 			DataType:   string(f.DataType),
 			Nullable:   f.Nullable,
 			Sortable:   f.Sortable,
-			Selectable: f.Selectable,
+			Hideable:   f.Selectable,
+			Selectable: f.Selectable, // 过渡期旧键与 hideable 恒同值,见 FieldSchema
 			Enum:       f.Enum,
 		}
 		if cfg == nil || !cfg.WhereDisabled(f.Key) {
@@ -110,6 +115,7 @@ func BuildSchema(meta TableMeta, cfg *QueryConfig) ResourceSchema {
 			fs.Sortable = false
 		}
 		if cfg != nil && cfg.SelectDisabled(f.Key) {
+			fs.Hideable = false
 			fs.Selectable = false
 		}
 		if f.API != nil {
@@ -117,7 +123,7 @@ func BuildSchema(meta TableMeta, cfg *QueryConfig) ResourceSchema {
 			api.Mode = inferAPIMode(f)
 			fs.API = &api
 		}
-		if len(fs.Ops) == 0 && !fs.Sortable && !fs.Selectable {
+		if len(fs.Ops) == 0 && !fs.Sortable && !fs.Hideable {
 			continue // 完全禁用 → 不出现在 schema
 		}
 		if fs.Ops == nil {

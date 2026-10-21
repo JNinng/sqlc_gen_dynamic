@@ -37,7 +37,9 @@ make clean
 
 ```bash
 # make sqlc
-go build -o bin/sqlc_gen_dynamic ./tools/sqlc_gen_dynamic
+# Windows 下须加 .exe 后缀(无扩展名二进制无法被 sqlc process 插件解析):
+go build -o bin/sqlc_gen_dynamic ./tools/sqlc_gen_dynamic    # Linux/macOS
+go build -o bin/sqlc_gen_dynamic.exe ./tools/sqlc_gen_dynamic # Windows
 sqlc generate -f example/db/sqlc.yaml
 
 # make test
@@ -60,13 +62,13 @@ sha256sum bin/sqlc_gen_dynamic.wasm
 
 > 完整参考(语法规则、列级 / 表级指令、PG 类型 → dataType 映射、能力矩阵、预设展开、操作符语义、校验规则与 fail 条件全集)见 [dsl.md](./dsl.md)。
 
-生成策略全部声明在 DDL 注释中,随迁移版本化。指令必须包裹在 `[ ]` 中且内容以 `@` 起始;不以 `@` 起始的方括号是 label 字面文本(人类注释不误伤)。指令分列级(`@dynamic` / `@sortable` / `@selectable` / `@hidden` / `@api`)与表级(`@default_sort` / `@page` / `@pk` / `@scope`)两类,涵盖过滤 / 排序 / 返回列选择 / 分页 / 行级权限 / 选项数据源等能力。
+生成策略全部声明在 DDL 注释中,随迁移版本化。指令必须包裹在 `[ ]` 中且内容以 `@` 起始;不以 `@` 起始的方括号是 label 字面文本(人类注释不误伤)。指令分列级(`@dynamic` / `@sortable` / `@hideable` / `@internal` / `@api`;旧名 `@selectable` / `@hidden` 为兼容期别名,生成期有 deprecation 提示)与表级(`@default_sort` / `@page` / `@pk` / `@scope`)两类,涵盖过滤 / 排序 / 返回列选择 / 分页 / 行级权限 / 选项数据源等能力。
 
 示例:
 
 ```sql
-COMMENT ON COLUMN users.name     IS '姓名 [@dynamic: fuzzy, exact @sortable @selectable]';
-COMMENT ON COLUMN users.password IS '密码 [@hidden]';
+COMMENT ON COLUMN users.name     IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable]';
+COMMENT ON COLUMN users.password IS '密码 [@internal]';
 COMMENT ON TABLE  users          IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]';
 ```
 
@@ -94,7 +96,7 @@ COMMENT ON TABLE  users          IS '用户表 [@default_sort: created_at DESC @
 
 | 位置 | 键 | 类型 | 约束 |
 |---|---|---|---|
-| `fields` | 数组 | string | 逻辑字段名;缺省(nil)= 返回全部非 `@hidden` 列;**显式空数组 `[]` 拒绝**(与缺省语义二分);重复去重保序;`@hidden`/select 禁用字段拒绝 |
+| `fields` | 数组 | string | 逻辑字段名;缺省(nil)= 返回全部非 `@internal` 列;**显式空数组 `[]` 拒绝**(与缺省语义二分);重复去重保序;`@internal`/select 禁用字段拒绝 |
 | `where` | `field` | string | 逻辑字段名(大小写敏感白名单) |
 | `where` | `op` | string | 该字段能力集内(见 `_query-schema` 的 `fields[].ops`;操作符语义见 [dsl.md §4.4](./dsl.md#44-操作符语义)) |
 | `where` | `value` | any | 主比较值,严格类型收敛(integer 校验整数性、datetime 只收 RFC3339、date 只收 `YYYY-MM-DD`,不收字符串数字);`is_null`/`not_null` **禁止携带** |

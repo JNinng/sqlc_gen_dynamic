@@ -35,9 +35,14 @@ func Generate(_ context.Context, req *pb.GenerateRequest) (*pb.GenerateResponse,
 	if err != nil {
 		return nil, err
 	}
-	tables, err := buildTableSpecs(req, opts)
+	tables, deprecations, err := buildTableSpecs(req, opts)
 	if err != nil {
 		return nil, err
+	}
+	// 弃用旧指令名的生成期提示(stderr,不进 stdout——stdout 是 sqlc 协议通道)。
+	// 非 fail:旧名解析为等价能力,提示指向新名与计划移除版本,见 deprecatedDirectives。
+	for _, d := range deprecations {
+		fmt.Fprintf(os.Stderr, "sqlc_gen_dynamic: deprecation: %s\n", d)
 	}
 	resp := &pb.GenerateResponse{}
 	for _, spec := range tables {
@@ -279,7 +284,7 @@ func (tc *tableCode) fieldConstSection() string {
 	spec := tc.spec
 	var b strings.Builder
 	fmt.Fprintf(&b, "// %sField 提供逻辑字段常量,供禁用选项、OrderBy 与 SelectFields 引用。\n", spec.Singular)
-	b.WriteString("// 字段名拼写错误将在编译期被捕获;@hidden 列不提供常量。\n")
+	b.WriteString("// 字段名拼写错误将在编译期被捕获;@internal 列不提供常量。\n")
 	fmt.Fprintf(&b, "var %sField = struct {\n", spec.Singular)
 	for _, c := range spec.Columns {
 		if c.Hidden {
@@ -375,7 +380,7 @@ func (tc *tableCode) paramsSection() string {
 	}
 	b.WriteString("\t// OrderBy 指定排序(逻辑字段名与方向);为 nil 时回落表级 @default_sort。\n")
 	b.WriteString("\tOrderBy []dynq.OrderBy\n")
-	b.WriteString("\t// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @hidden 列)。\n")
+	b.WriteString("\t// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @internal 列)。\n")
 	b.WriteString("\tSelectFields []dynq.FieldName\n")
 	b.WriteString("\t// Limit 为 offset 模式的每页条数,为 0 时使用表级默认 pageSize。\n")
 	b.WriteString("\tLimit  uint32\n")

@@ -6,12 +6,12 @@
 //	table customers: [@default_sort: created_at DESC]
 //	table customers: [@pk: id]
 //	table customers: [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted('customers', user_id:varchar)]
-//	column customers.id: [@dynamic: eq, neq @sortable @selectable]
-//	column customers.name: [@dynamic: contains, prefix, suffix @sortable @selectable]
-//	column customers.amount_cents: [@dynamic: gt, gte, lt, lte, between @sortable @selectable]
-//	column customers.owner_user_id: [@hidden]
-//	column customers.owner_dept_id: [@hidden]
-//	column customers.created_at: [@dynamic: gt, gte, lt, lte, between @sortable @selectable]
+//	column customers.id: [@dynamic: eq, neq @sortable @hideable]
+//	column customers.name: [@dynamic: contains, prefix, suffix @sortable @hideable]
+//	column customers.amount_cents: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
+//	column customers.owner_user_id: [@internal]
+//	column customers.owner_dept_id: [@internal]
+//	column customers.created_at: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
 //	column customers.deleted_at: [@dynamic: is_null, not_null]
 //
 // 逻辑键(camelCase)是对外契约;snake_case 物理列名仅在本文件内部使用。
@@ -129,7 +129,7 @@ var customersFieldIndex = map[dynq.FieldName]int{
 }
 
 // CustomerField 提供逻辑字段常量,供禁用选项、OrderBy 与 SelectFields 引用。
-// 字段名拼写错误将在编译期被捕获;@hidden 列不提供常量。
+// 字段名拼写错误将在编译期被捕获;@internal 列不提供常量。
 var CustomerField = struct {
 	ID          dynq.FieldName
 	Name        dynq.FieldName
@@ -183,7 +183,7 @@ type ListCustomersParams struct {
 	Scope *CustomersScope
 	// OrderBy 指定排序(逻辑字段名与方向);为 nil 时回落表级 @default_sort。
 	OrderBy []dynq.OrderBy
-	// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @hidden 列)。
+	// SelectFields 指定动态投影列(逻辑键);为 nil 时默认全量投影(除 @internal 列)。
 	SelectFields []dynq.FieldName
 	// Limit 为 offset 模式的每页条数,为 0 时使用表级默认 pageSize。
 	Limit uint32
@@ -212,7 +212,7 @@ func ParseCustomersQuery(q *dynq.Query, opts ...dynq.QueryOption) (ListCustomers
 	slots := dynq.NewSlots()
 	budget := dynq.NewBudget()
 
-	// 解析投影字段:显式空数组、@hidden 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。
+	// 解析投影字段:显式空数组、@internal 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。
 	selectFields, err := dynq.ParseSelectFields(q.Fields, cfg, customersRegistry)
 	if err != nil {
 		return out, err

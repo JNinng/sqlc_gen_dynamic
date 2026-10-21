@@ -48,7 +48,7 @@ func TestBuildSchemaAPI(t *testing.T) {
 			{Key: "ownerId", Column: "owner_id", DataType: DataTypeUUID, Selectable: true,
 				Ops: []Op{OpEq},
 				API: &FieldAPI{Endpoint: "/api/v1/owners", ValueKey: "id", LabelKey: "name", Mode: "search"}},
-			// @api 与 @hidden 互斥(生成期 fail),此处仅验证 hidden 列不输出。
+			// @api 与 @internal 互斥(生成期 fail),此处仅验证 internal 列不输出。
 			{Key: "secret", Column: "secret", DataType: DataTypeString, Hidden: true,
 				API: &FieldAPI{Endpoint: "/x", ValueKey: "v", LabelKey: "l"}},
 		},
@@ -93,6 +93,28 @@ func TestBuildSchemaAPI(t *testing.T) {
 	// JSON 字段名契约。
 	got := mustJSONFieldNames(t, s)
 	for _, want := range []string{`"api"`, `"endpoint"`, `"valueKey"`, `"labelKey"`, `"mode"`} {
+		if !containsStr(got, want) {
+			t.Fatalf("schema JSON missing %s:\n%s", want, got)
+		}
+	}
+}
+
+// ---- hideable/selectable 双键:hideable 为主,selectable 过渡期同值双发 ----
+
+func TestBuildSchemaHideableKey(t *testing.T) {
+	meta := TableMeta{
+		Resource: "users",
+		Fields: []FieldMeta{
+			{Key: "id", Column: "id", DataType: DataTypeInteger, Selectable: true},
+			{Key: "name", Column: "name", DataType: DataTypeString, Sortable: true},
+		},
+		Tiebreaker:  "id",
+		PageDefault: 20,
+		PageMax:     100,
+	}
+	got := mustJSONFieldNames(t, BuildSchema(meta, nil))
+	// 主键与新键恒同值输出(true 列两个字段都在,false 列两个字段都是 false)。
+	for _, want := range []string{`"hideable":true`, `"selectable":true`, `"hideable":false`, `"selectable":false`} {
 		if !containsStr(got, want) {
 			t.Fatalf("schema JSON missing %s:\n%s", want, got)
 		}

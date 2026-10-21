@@ -5,7 +5,7 @@ sqlc_gen_dynamic 支持两种接入形态,sqlc.yaml 的 `plugins` 块二选一:
 - **wasm**(推荐):锁定 GitHub Release 发布资产(`url` + `sha256`),`sqlc generate` 时自动下载校验,本机无需构建插件;
 - **process(本地二进制)**:指向本地插件可执行文件,适合开发调试与内网环境。
 
-运行期函数来自公开 Go 模块 `github.com/jninng/sqlc_gen_dynamic` 的 `dynq` 包,与插件同 tag 发布、同版本配套。注释 DSL 的声明方式见 [README](./README.md) 注释 DSL 一节,协议与调用契约见同文件其余章节,设计原理见 [desc.md](./desc.md)。
+运行期函数来自公开 Go 模块 `github.com/jninng/sqlc_gen_dynamic` 的 `dynq` 包,与插件同 tag 发布、同版本配套。注释 DSL 的声明方式(语法、列级 / 表级指令、类型映射、能力矩阵、预设展开、校验规则)见 [dsl.md](./dsl.md);查询入参 / 响应协议与调用契约见 [README](./README.md),行级数据权限机制见 [scope.md](./scope.md),前端 Schema 契约见 [schema.md](./schema.md),设计原理见 [desc.md](./desc.md)。
 
 ## 前置条件
 
@@ -83,7 +83,7 @@ sql:
           page_max: 200
 ```
 
-动态表声明写在 schema.sql 的 `COMMENT ON` 中(列级 `@dynamic` / `@sortable` / `@selectable` / `@hidden` / `@api`,表级 `@default_sort` / `@page` / `@pk` / `@scope`);DSL 非法为生成期 fail,报错定位到具体列。
+动态表声明写在 schema.sql 的 `COMMENT ON` 中(列级 `@dynamic` / `@sortable` / `@selectable` / `@hidden` / `@api`,表级 `@default_sort` / `@page` / `@pk` / `@scope`);DSL 语法、能力矩阵、预设展开与 fail 条件全集见 [dsl.md](./dsl.md),非法声明为生成期 fail,报错定位到具体列。
 
 ### codegen options
 

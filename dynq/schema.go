@@ -19,7 +19,7 @@ type FieldAPI struct {
 }
 
 // FieldSchema 是 schema 中的单个字段契约。
-// 不携带 ui 字段:控件族由 data_type 唯一确定(映射表见 README/desc §10.2),
+// 不携带 ui 字段:控件族由 data_type 唯一确定(映射表见 schema.md/desc §10.2),
 // 操作符渲染的唯一事实源是同层 ops——所有渲染信息均可由
 // (data_type, ops, sortable, selectable) 派生,不再生成第二份副本。
 type FieldSchema struct {

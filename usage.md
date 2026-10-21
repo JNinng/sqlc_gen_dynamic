@@ -22,8 +22,8 @@ sqlc_gen_dynamic 支持两种接入形态,sqlc.yaml 的 `plugins` 块二选一:
 plugins:
   - name: "sqlc_gen_dynamic"
     wasm:
-      url: "https://github.com/JNinng/sqlc_gen_dynamic/releases/download/v0.1.2/sqlc_gen_dynamic-v0.1.2.wasm"
-      sha256: "8a98dac672fbcf64d4a25ac344bc52e9aaab8f0550f4c3a0725dd4f46b690344"
+      url: "https://github.com/JNinng/sqlc_gen_dynamic/releases/download/v0.2.0/sqlc_gen_dynamic-v0.2.0.wasm"
+      sha256: "0b71fc8bc02c93085119e82b1824398aa250c03715dd85e4ff8f78c92f35dac7"
     env:                       # 可选:透传 DYNQ_DUMP_REQUEST 可把 GenerateRequest dump 落盘排查
       - "DYNQ_DUMP_REQUEST"
 ```

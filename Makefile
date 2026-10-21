@@ -9,6 +9,7 @@
 
 SQLC       ?= sqlc
 GO         ?= go
+VERSION    ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo dev)
 PLUGIN_EXE  = bin/sqlc_gen_dynamic$(if $(filter Windows_NT,$(OS)),.exe,)
 WASM        = bin/sqlc_gen_dynamic.wasm
 EXE_SHA     = bin/sqlc_gen_dynamic.exe.sha256
@@ -32,9 +33,13 @@ check: sqlc
 $(WASM):
 	GOOS=wasip1 GOARCH=wasm $(GO) build -o $@ ./tools/sqlc_gen_dynamic
 
+# 发布资产以版本命名(GitHub Release 上传件,与 usage.md 锁定示例同名);
+# VERSION 缺省取最近 tag,打完 v0.2.0 tag 后执行即为正确版本名。
 release-wasm: $(WASM)
 	sha256sum $(WASM) > $(WASM).sha256
 	cat $(WASM).sha256
+	cp $(WASM) bin/sqlc_gen_dynamic-$(VERSION).wasm
+	cp $(WASM).sha256 bin/sqlc_gen_dynamic-$(VERSION).wasm.sha256
 
 clean:
-	rm -f $(PLUGIN_EXE) $(WASM) $(WASM).sha256 $(EXE_SHA)
+	rm -f $(PLUGIN_EXE) $(WASM) $(WASM).sha256 $(EXE_SHA) bin/sqlc_gen_dynamic-*.wasm bin/sqlc_gen_dynamic-*.wasm.sha256

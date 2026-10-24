@@ -102,7 +102,7 @@ sql:
 
 ## 产物布局:同包与跨包
 
-- **同包**(推荐起步):两个 sql 块 `out` 同目录、`package` 同名。插件产物直接引用块 1 的模型与 DBTX,无需 `model_import`;每张动态表产出一份 `<table>_dynamic_gen.go`(有 `@pk` 时含读面 registry / 字段常量 / Params / Parse / Schema / List / Count,set-capable `@updatable` 列另含 typed Update 面;**无 `@pk` 表只产更新面**,不生成读侧产物),与 sqlc-gen-go 产物同包共存。命名空间对象取 `<表名单数>Update`(而非单数名,模型类型已占用);`UpdateXxx` 与 sqlc 静态查询撞名时以 sqlc query 侧重命名规避;`<单数>Table` / `<单数>Update` / `<单数>UpdateOption` 与任一 sqlc 模型类型撞名时生成期 fail。
+- **同包**(推荐起步):两个 sql 块 `out` 同目录、`package` 同名。插件产物直接引用块 1 的模型与 DBTX,无需 `model_import`;每张动态表产出一份 `<table>_dynamic_gen.go`(有 `@pk` 时含读面 registry / 字段常量 / Params / Parse / Schema / List / Count,set-capable `@updatable` 列另含 typed Update 面;**无 `@pk` 表只产更新面**,不生成读侧产物),与 sqlc-gen-go 产物同包共存。命名空间对象取 `<表名单数>Update`(而非单数名,模型类型已占用);`UpdateXxx` 为包级函数,sqlc 静态查询为 `*Queries` 方法,同名可共存(同名仅影响阅读,可按需给 sqlc query 改名);`<单数>Table` / `<单数>Update` / `<单数>UpdateOption` 与任一 sqlc 模型类型撞名时生成期 fail。
 - **跨包**:块 2 options 追加 `model_import`(块 1 产物 import 路径)与 `model_package`(包名,作限定前缀),插件产物独立成包并跨包引用模型类型。
 
 ## 升级

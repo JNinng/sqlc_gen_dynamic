@@ -231,7 +231,7 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
 - **`@filter` 与 `WithoutFilter`**:`@filter` 不变量恒定 AND 进 UPDATE 的 WHERE;声明了 `@filter` 的表生成 `XxxUpdate.WithoutFilter()`(整表级绕过、幂等,不豁免零 where 守卫)。
 - **`@scope` 不参与写面**:Update 不取 Scope、不平移权限谓词;权限由读取阶段保证(先查后改),TOCTOU 高风险场景用同事务 `SELECT ... FOR UPDATE`、RLS 或静态条件 UPDATE。
 - **`@internal` 正交**:`@internal` + `@updatable` 合法,Update 不读 `Hidden`(服务端可写、协议不可见)。
-- **命名冲突**:`<单数>Table` / `<单数>Update` / `<单数>UpdateOption` 与任一 sqlc 模型类型撞名时生成期 fail(同包共存);`UpdateXxx` 与 sqlc 静态查询撞名时以 sqlc query 侧重命名规避。
+- **命名冲突**:`<单数>Table` / `<单数>Update` / `<单数>UpdateOption` 与任一 sqlc 模型类型撞名时生成期 fail(同包共存);`UpdateXxx` 是包级函数,sqlc 静态查询是 `*Queries` 方法,同名可共存。
 - 返回 `(int64, error)`:n = 实际改写行数,0 = 未命中,不隐式特判。
 - 已知限制:`where` 形态不能与显式 op 组合(不支持 `where, eq`);null op 不随 `auto` / `where` 自动授予;同列重复 `@updatable` 取首条。
 

@@ -5,7 +5,7 @@
 //	table sys_user: [@pk: id]
 //	table sys_user: [@scope: id in_any fn_perm_user_ids(user_id:varchar, scopes:int[])]
 //	column sys_user.id: [@dynamic: eq, neq]
-//	column sys_user.name: [@dynamic: contains, prefix, suffix]
+//	column sys_user.name: [@dynamic: contains, prefix, suffix @updatable]
 //
 // 逻辑键(camelCase)是对外契约;snake_case 物理列名仅在本文件内部使用。
 package gen
@@ -482,6 +482,205 @@ func CountSysUser(ctx context.Context, db DBTX, params ListSysUserParams, opts .
 		return 0, err
 	}
 	return total, nil
+}
+
+// SysUserTable 是本表 Update 方法族的编译期 marker:选项类型按表绑定,
+// 跨表误用(SET / WHERE 选项串表)在编译期被拒绝,而不是运行期报错。
+type SysUserTable struct{}
+
+// SysUserUpdate 是 Update 方法族的命名空间对象(如 SysUserUpdate.SetName)。
+// 取 XxxUpdate 而非表名单数:与 sqlc-gen-go 同包时模型类型已占用单数名
+// (如 sys_user → SysUser),命名空间对象不能复用。
+var SysUserUpdate SysUserTable
+
+// SysUserUpdateOption 是本表的更新选项别名。SET 资格面是列级 @updatable 的
+// set-capable 形态;WHERE 资格面是 where-capable 形态,有 @pk 时自动附带
+// 主键列的完整类型矩阵(定位方法)。两个能力面与 @dynamic / @scope 解耦。
+type SysUserUpdateOption = dynq.UpdateOption[SysUserTable]
+
+// ---- SET 白名单(set-capable @updatable 列;未调用的列保持原值)----
+
+// SetName 设置 name（姓名）列值，无 nil。
+func (SysUserTable) SetName(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		return st.Set("name", "name", "", v)
+	}
+}
+
+// ---- WHERE 定位方法族(@pk 自动矩阵 + where-capable @updatable)----
+
+// WhereIDEq 追加 id 列 = 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereIDEq(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		return st.Where("id", dynq.OpEq, sq.Expr("id = ?", v))
+	}
+}
+
+// WhereIDNeq 追加 id 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereIDNeq(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		return st.Where("id", dynq.OpNeq, sq.Expr("id <> ?", v))
+	}
+}
+
+// WhereIDIn 追加 id 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereIDIn(vs ...string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if err := dynq.CheckInLen("id", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpIn, sq.Expr("id IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereIDNotIn 追加 id 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereIDNotIn(vs ...string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if err := dynq.CheckInLen("id", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpNotIn, sq.Expr("id NOT IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereIDContains 追加 id 列 ILIKE 包含 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereIDContains(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("id")
+		}
+		return st.Where("id", dynq.OpContains, sq.Expr("id ILIKE ? ESCAPE '\\'", dynq.ContainsPattern(v)))
+	}
+}
+
+// WhereIDPrefix 追加 id 列 ILIKE 前缀 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereIDPrefix(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("id")
+		}
+		return st.Where("id", dynq.OpPrefix, sq.Expr("id ILIKE ? ESCAPE '\\'", dynq.PrefixPattern(v)))
+	}
+}
+
+// WhereIDSuffix 追加 id 列 ILIKE 后缀 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereIDSuffix(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("id")
+		}
+		return st.Where("id", dynq.OpSuffix, sq.Expr("id ILIKE ? ESCAPE '\\'", dynq.SuffixPattern(v)))
+	}
+}
+
+// WhereNameEq 追加 name 列 = 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereNameEq(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		return st.Where("name", dynq.OpEq, sq.Expr("name = ?", v))
+	}
+}
+
+// WhereNameNeq 追加 name 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereNameNeq(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		return st.Where("name", dynq.OpNeq, sq.Expr("name <> ?", v))
+	}
+}
+
+// WhereNameIn 追加 name 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereNameIn(vs ...string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if err := dynq.CheckInLen("name", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("name", dynq.OpIn, sq.Expr("name IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereNameNotIn 追加 name 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereNameNotIn(vs ...string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if err := dynq.CheckInLen("name", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("name", dynq.OpNotIn, sq.Expr("name NOT IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereNameContains 追加 name 列 ILIKE 包含 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereNameContains(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("name")
+		}
+		return st.Where("name", dynq.OpContains, sq.Expr("name ILIKE ? ESCAPE '\\'", dynq.ContainsPattern(v)))
+	}
+}
+
+// WhereNamePrefix 追加 name 列 ILIKE 前缀 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereNamePrefix(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("name")
+		}
+		return st.Where("name", dynq.OpPrefix, sq.Expr("name ILIKE ? ESCAPE '\\'", dynq.PrefixPattern(v)))
+	}
+}
+
+// WhereNameSuffix 追加 name 列 ILIKE 后缀 条件;多条 WHERE 之间恒为 AND。
+func (SysUserTable) WhereNameSuffix(v string) SysUserUpdateOption {
+	return func(st *dynq.UpdateState[SysUserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("name")
+		}
+		return st.Where("name", dynq.OpSuffix, sq.Expr("name ILIKE ? ESCAPE '\\'", dynq.SuffixPattern(v)))
+	}
+}
+
+// UpdateSysUser 按 opts 收集的 SET / WHERE 组合更新行,返回实际改写行数。
+// SET 白名单与 WHERE 定位条件均来自列级 @updatable;有 @pk 时自动附带
+// 主键列的定位方法(类型矩阵)。@scope 不参与写面,权限由读取阶段保证。
+// 零 SET 或零调用方 WHERE 条件显式拒绝(Kind=set / where),不发全表 UPDATE,
+// 也不静默 no-op。
+//
+// 参数:
+//   - ctx: 更新上下文。
+//   - db:  数据库连接,满足 DBTX 接口即可。
+//   - opts: SET / WHERE 选项(SysUserUpdate.*),跨表选项编译期不可混用。
+//
+// 返回值:
+//   - int64: 实际改写行数;0 = 未命中(条件不匹配),不隐式特判。
+//   - error: 校验或执行失败时的错误。
+func UpdateSysUser(ctx context.Context, db DBTX, opts ...SysUserUpdateOption) (int64, error) {
+	st := dynq.NewUpdateState[SysUserTable]()
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(st); err != nil {
+			return 0, err
+		}
+	}
+	// 空 SET / 零 where 守卫:按调用方条件数计——@filter 叠加后最终 WHERE
+	// 恒非空,不得以最终 SQL 形态代替判断。
+	if err := st.Validate(); err != nil {
+		return 0, err
+	}
+	conds := make([]sq.Sqlizer, 0, len(st.Wheres()))
+	conds = append(conds, st.Wheres()...)
+	b := sq.Update("sys_user").PlaceholderFormat(sq.Dollar).Where(sq.And(conds))
+	for _, a := range st.Sets() {
+		b = b.Set(a.Column, sq.Expr("?"+a.Cast, a.Value))
+	}
+	query, args, err := b.ToSql()
+	if err != nil {
+		return 0, err
+	}
+	tag, err := db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // SysUserQuerySchema 是前端契约出口:返回经 opts 减法投影后的有效能力全集,

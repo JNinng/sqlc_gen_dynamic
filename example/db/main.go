@@ -1,7 +1,8 @@
 // main 是 example 工程的动态查询演示入口:启动即连接本地 PostgreSQL,
-// 重建独立测试库 → 应用 schema.sql → 种子数据 → 跑一组动态 List 查询演示
+// 重建独立测试库 → 应用 schema.sql → 种子数据 → 跑一组动态查询 / 更新演示
 // (过滤 / 冲突拒绝 / 分页双模式 / 游标 / 窄投影 / opts 禁用 / schema /
-// 跨表游标互斥 / @scope 行级数据权限 / @scope in_any 数组三态)。
+// 跨表游标互斥 / @scope 行级数据权限 / @scope in_any 数组三态 /
+// 动态更新面 typed 门)。
 //
 // 运行:go run ./example/db
 // 连接:默认 postgres://postgresql:root@localhost:5432/postgres(管理库),
@@ -19,8 +20,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/jninng/sqlc_gen_dynamic/dynq"
 	"example/db/gen"
+
+	"github.com/jninng/sqlc_gen_dynamic/dynq"
 )
 
 const (
@@ -124,6 +126,8 @@ func run() error {
 	demoScope(ctx, pool)
 	fmt.Println("== ⑩ @scope in_any 数组三态(NULL=放行 / {}=拒绝 / 非空=ANY) ==")
 	demoScopeInAny(ctx, pool)
+	fmt.Println("== ⑪ 动态更新面(能力切分 / @pk 自动定位 / @filter 绕过 / 无 @pk 更新面) ==")
+	demoUpdate(ctx, pool)
 
 	fmt.Println("\n全部演示完成 ✔")
 	return nil
@@ -555,6 +559,135 @@ func demoScopeInAny(ctx context.Context, pool *pgxpool.Pool) {
 		names = append(names, u.Name)
 	}
 	fmt.Printf("   scopes=[1,7] 放行 + name contains 工程 → %d 行 %v(业务条件仍生效)\n", len(res.Items), names)
+	fmt.Println()
+}
+
+// demoUpdate 演示动态更新面(typed 门):SET 资格来自 @updatable 的
+// set-capable 形态,WHERE 资格来自 where-capable 形态 + @pk 自动定位矩阵;
+// 与 @dynamic / @scope 解耦(权限走先查后改),@filter 不变量可用
+// WithoutFilter 绕过。放在全部查询演示之后,避免改写种子数据影响前序断言。
+func demoUpdate(ctx context.Context, pool *pgxpool.Pool) {
+	users := gen.New(pool)
+	show := func(label string, n int64, err error) {
+		if err != nil {
+			fmt.Printf("   %s → error: %v\n", label, err)
+			return
+		}
+		fmt.Printf("   %s → %d 行\n", label, n)
+	}
+	showErr := func(label string, err error) {
+		if err == nil {
+			fmt.Printf("   %s → !! 未被拒绝(不应发生)\n", label)
+			return
+		}
+		e := dynq.AsError(err)
+		fmt.Printf("   %s → %s (Kind=%s, Field=%s)\n", label, e.Reason, e.Kind, e.Field)
+	}
+
+	// ① 单行更新:@pk 自动定位方法(主键列无需声明 @updatable)。
+	n, err := gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetName("Alice·改名"),
+		gen.UserUpdate.SetBalance(dynq.Ptr(321.5)),
+		gen.UserUpdate.SetTags(dynq.Ptr([]int64{7, 8})),
+		gen.UserUpdate.SetMeta(dynq.Ptr([]byte(`{"stage":"updated"}`))),
+		gen.UserUpdate.WhereIDEq(1),
+	)
+	show("单行 SET 多列 × WhereIDEq(1)(@pk 自动定位)", n, err)
+	if u, gerr := users.GetUser(ctx, 1); gerr == nil {
+		fmt.Printf("     读回:name=%q balance=%v tags=%v meta=%s\n", u.Name, u.Balance, u.Tags, u.Meta)
+	}
+
+	// ② 显式收窄:age 声明 @updatable: eq, range(显式清单),只有清单内 op
+	// 生成 Where 方法(WhereAgeIn 不存在,编译期能力矩阵)。
+	n, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetAge(dynq.Ptr(int64(18))),
+		gen.UserUpdate.WhereStatusEq(gen.UserStatusActive),
+		gen.UserUpdate.WhereAgeBetween(25, 40),
+	)
+	show("显式清单 SET age=18 × WhereStatusEq(active) × WhereAgeBetween(25,40)", n, err)
+
+	// ③ CAS 分离式:SET 与 WHERE 正交(同列可分别出现)。
+	n, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetStatus(gen.UserStatusBanned),
+		gen.UserUpdate.WhereIDEq(6),
+		gen.UserUpdate.WhereStatusEq(gen.UserStatusActive),
+	)
+	show("CAS SetStatus(banned) × WhereIDEq(6) × WhereStatusEq(active)", n, err)
+
+	// ④ set-only 列(email)只能 Set,不产 Where 方法。
+	n, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetEmail("alice2@x.com"),
+		gen.UserUpdate.WhereIDEq(5),
+	)
+	show("set-only SetEmail × WhereIDEq(5)", n, err)
+
+	// ⑤ where-only 列(org_id)只能定位,不产 Set 方法。
+	n, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetRole(dynq.Ptr("org")),
+		gen.UserUpdate.WhereOrgIDEq("0f14d0ab-9605-4a62-a9e4-5ed26688389b"),
+	)
+	show("where-only WhereOrgIDEq(同组织两行)", n, err)
+
+	// ⑥ @internal + set:password 服务端可写、协议不可见(Update 与 @internal 正交)。
+	n, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetPassword("hunter2"),
+		gen.UserUpdate.WhereIDEq(5),
+	)
+	show("@internal SetPassword × WhereIDEq(5)", n, err)
+
+	// ⑦ 受控批量:WhereIDIn 先圈定 id 集。
+	n, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetRole(dynq.Ptr("batch")),
+		gen.UserUpdate.WhereIDIn(3, 4, 5),
+	)
+	show("批量 SET role × WhereIDIn(3,4,5)", n, err)
+
+	// ⑧ @filter 不变量:软删行(Bob id=2)默认不可改;WithoutFilter 整表绕过。
+	n, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetRole(dynq.Ptr("ghost")),
+		gen.UserUpdate.WhereIDEq(2),
+	)
+	show("@filter deleted_at is_null × 软删行 WhereIDEq(2)", n, err)
+	n, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetRole(dynq.Ptr("restored")),
+		gen.UserUpdate.WhereIDEq(2),
+		gen.UserUpdate.WithoutFilter(),
+	)
+	show("WithoutFilter 绕过 @filter × 软删行 WhereIDEq(2)", n, err)
+
+	// ⑨ 守卫:零 SET / 零调用方 where / between 倒置 / 同槽位重复。
+	_, err = gen.UpdateUsers(ctx, pool, gen.UserUpdate.WhereIDEq(1))
+	showErr("零 SET", err)
+	_, err = gen.UpdateUsers(ctx, pool, gen.UserUpdate.SetName("x"))
+	showErr("零调用方 where(仅 @filter 不豁免)", err)
+	_, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetAge(dynq.Ptr(int64(1))),
+		gen.UserUpdate.WhereAgeBetween(50, 10),
+	)
+	showErr("between 倒置(lo > hi)", err)
+	_, err = gen.UpdateUsers(ctx, pool,
+		gen.UserUpdate.SetAge(dynq.Ptr(int64(1))),
+		gen.UserUpdate.WhereIDEq(1),
+		gen.UserUpdate.WhereIDEq(2),
+	)
+	showErr("同槽位重复 WhereIDEq × 2", err)
+
+	// ⑩ 无 @pk 表的更新面:sys_resource_grant 只有 where-capable 键列 +
+	// set-capable note;零 where 守卫只保证"至少一个条件",调用方自带唯一组合。
+	n, err = gen.UpdateSysResourceGrant(ctx, pool,
+		gen.SysResourceGrantUpdate.SetNote(dynq.Ptr("显式共享")),
+		gen.SysResourceGrantUpdate.WhereResourceEq("customers"),
+		gen.SysResourceGrantUpdate.WhereUserIDEq("u4"),
+	)
+	show("无 @pk 复合定位(resource + user_id)× SetNote", n, err)
+
+	// ⑪ @scope 不参与写面:UpdateCustomers 无需 ScopeFromContext,
+	// 权限由读取阶段(先查后改)保证。
+	n, err = gen.UpdateCustomers(ctx, pool,
+		gen.CustomerUpdate.SetAmountCents(15000),
+		gen.CustomerUpdate.WhereIDEq(1),
+	)
+	show("@scope 表 Update 无需 Scope(SetAmountCents × WhereIDEq(1))", n, err)
 	fmt.Println()
 }
 

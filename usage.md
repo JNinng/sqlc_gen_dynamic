@@ -14,7 +14,7 @@ sqlc_gen_dynamic 支持两种接入形态,sqlc.yaml 的 `plugins` 块二选一:
 
 ## sqlc.yaml 接线(双 sql 块)
 
-一个 `sql` 块只挂一个 codegen,因此配置**两个块共享同一份 schema.sql**(迁移文件即 DDL 单一事实源):块 1 sqlc-gen-go 产出模型与固定查询;块 2 本插件仅消费 Catalog 生成动态 List(`queries` 字段 sqlc 要求必填但插件忽略)。
+一个 `sql` 块只挂一个 codegen,因此配置**两个块共享同一份 schema.sql**(迁移文件即 DDL 单一事实源):块 1 sqlc-gen-go 产出模型与固定查询;块 2 本插件仅消费 Catalog 生成动态 List / typed Update(`queries` 字段 sqlc 要求必填但插件忽略)。
 
 ### plugins 块:wasm 形态
 
@@ -85,7 +85,7 @@ sql:
           page_max: 200
 ```
 
-动态表声明写在 schema.sql 的 `COMMENT ON` 中(列级 `@dynamic` / `@sortable` / `@hideable` / `@internal` / `@api`,表级 `@default_sort` / `@page` / `@pk` / `@scope`;旧名 `@selectable` / `@hidden` 为兼容期别名,生成期有 deprecation 提示);DSL 语法、能力矩阵、预设展开与 fail 条件全集见 [dsl.md](./dsl.md),非法声明为生成期 fail,报错定位到具体列。
+动态表声明写在 schema.sql 的 `COMMENT ON` 中(列级 `@dynamic` / `@sortable` / `@hideable` / `@internal` / `@updatable` / `@api`,表级 `@default_sort` / `@page` / `@pk` / `@update` / `@scope` / `@filter`;`@updatable` 支持 `auto` / `set` / `where` / `false` / 显式 op 清单五形态,`@update` 支持裸形态与 `true` / `false` / `auto`;旧名 `@selectable` / `@hidden` 为兼容期别名,生成期有 deprecation 提示);DSL 语法、能力矩阵、预设展开与 fail 条件全集见 [dsl.md](./dsl.md),非法声明为生成期 fail,报错定位到具体列。
 
 ### codegen options
 
@@ -94,7 +94,7 @@ sql:
 | `package` | 产物包名(必填;与块 1 产物同包时须一致) |
 | `model_import` / `model_package` | 块 1 产物位置(跨包引用其模型类型与 DBTX 时必填,见下节) |
 | `schema` | 目标 schema,默认 `public` |
-| `tables` | 生成范围;缺省为该 schema 下所有含 `@dynamic` 或 `@pk` 声明的表 |
+| `tables` | 生成范围;缺省为该 schema 下所有含 `@dynamic` / `@pk` / set-capable `@updatable` 声明的表 |
 | `default_ops` | 未标注列的策略,默认 `none`(显式声明才生成,防 Params 字段爆炸) |
 | `go_type_overrides` | 逃生舱,镜像 sqlc-gen-go 的类型覆盖 |
 | `runtime_import` | dynq 运行时包导入路径 |
@@ -102,7 +102,7 @@ sql:
 
 ## 产物布局:同包与跨包
 
-- **同包**(推荐起步):两个 sql 块 `out` 同目录、`package` 同名。插件产物直接引用块 1 的模型与 DBTX,无需 `model_import`;每张动态表产出一份 `<table>_dynamic_gen.go`(registry / 字段常量 / Params / Parse / Schema / List / Count),与 sqlc-gen-go 产物同包共存。
+- **同包**(推荐起步):两个 sql 块 `out` 同目录、`package` 同名。插件产物直接引用块 1 的模型与 DBTX,无需 `model_import`;每张动态表产出一份 `<table>_dynamic_gen.go`(有 `@pk` 时含读面 registry / 字段常量 / Params / Parse / Schema / List / Count,set-capable `@updatable` 列另含 typed Update 面;**无 `@pk` 表只产更新面**,不生成读侧产物),与 sqlc-gen-go 产物同包共存。命名空间对象取 `<表名单数>Update`(而非单数名,模型类型已占用);`UpdateXxx` 与 sqlc 静态查询撞名时以 sqlc query 侧重命名规避;`<单数>Table` / `<单数>Update` / `<单数>UpdateOption` 与任一 sqlc 模型类型撞名时生成期 fail。
 - **跨包**:块 2 options 追加 `model_import`(块 1 产物 import 路径)与 `model_package`(包名,作限定前缀),插件产物独立成包并跨包引用模型类型。
 
 ## 升级

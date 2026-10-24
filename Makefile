@@ -10,6 +10,7 @@
 SQLC       ?= sqlc
 GO         ?= go
 VERSION    ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo dev)
+PLUGIN_SRC  = $(wildcard tools/sqlc_gen_dynamic/*.go) go.mod go.sum
 PLUGIN_EXE  = bin/sqlc_gen_dynamic$(if $(filter Windows_NT,$(OS)),.exe,)
 WASM        = bin/sqlc_gen_dynamic.wasm
 EXE_SHA     = bin/sqlc_gen_dynamic.exe.sha256
@@ -19,7 +20,8 @@ EXE_SHA     = bin/sqlc_gen_dynamic.exe.sha256
 sqlc: $(PLUGIN_EXE)
 	$(SQLC) generate -f example/db/sqlc.yaml
 
-$(PLUGIN_EXE):
+# 依赖插件源码与模块文件:插件改动后 make sqlc 必重建,避免静默复用旧二进制。
+$(PLUGIN_EXE): $(PLUGIN_SRC)
 	$(GO) build -o $@ ./tools/sqlc_gen_dynamic
 
 test:

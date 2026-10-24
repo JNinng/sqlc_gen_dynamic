@@ -40,6 +40,10 @@ func Anys[T any](vals []T) []any {
 // Addr 返回 v 的指针(用于枚举等需类型转换的 Params 字段赋值)。
 func Addr[T any](v T) *T { return &v }
 
+// Ptr 返回 v 的指针:可空列的 Set 方法以 *T 承载三态(nil = 显式置 NULL),
+// 字面量取地址经本函数,无需先声明变量。
+func Ptr[T any](v T) *T { return &v }
+
 // ConvertSlice 将 []string 转为字符串底层类型的切片(如生成的枚举类型)。
 func ConvertSlice[T ~string](vals []string) []T {
 	out := make([]T, len(vals))

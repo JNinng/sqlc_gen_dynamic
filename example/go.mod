@@ -19,4 +19,6 @@ require (
 	golang.org/x/text v0.29.0 // indirect
 )
 
-// replace github.com/jninng/sqlc_gen_dynamic => ../
+// 示例工程随仓库演进:生成物 import 的 dynq 恒取本地实现,保证
+// `make sqlc` 产物与当前运行时库版本一致(发版后外部工程才走版本锁定)。
+replace github.com/jninng/sqlc_gen_dynamic => ../

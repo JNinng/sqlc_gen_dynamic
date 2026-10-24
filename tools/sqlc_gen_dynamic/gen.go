@@ -84,19 +84,25 @@ func renderTable(spec *TableSpec, opts *Options) ([]byte, error) {
 	tc.sing = spec.Singular
 	tc.reg = lowerFirst(spec.Name)
 
-	parseSrc := tc.parseSection()
-	sections := []string{
-		tc.headerSection(),
-		tc.registrySection(),
-		tc.fieldConstSection(),
-		tc.paramsSection(),
-		parseSrc,
-		tc.validateSection(),
-		tc.whereSection(),
-		tc.cursorValuesSection(),
-		tc.listSection(),
-		tc.countSection(),
-		tc.schemaSection(),
+	// 读面(@pk)与更新面独立拼装:无 @pk 表只产 header + update 段
+	// (registry / Params / Parse / List / Count / Schema / 游标一律不生成)。
+	sections := []string{tc.headerSection()}
+	if spec.ReadEnabled {
+		sections = append(sections,
+			tc.registrySection(),
+			tc.fieldConstSection(),
+			tc.paramsSection(),
+			tc.parseSection(),
+			tc.validateSection(),
+			tc.whereSection(),
+			tc.cursorValuesSection(),
+			tc.listSection(),
+			tc.countSection(),
+			tc.updateSection(),
+			tc.schemaSection(),
+		)
+	} else {
+		sections = append(sections, tc.updateSection())
 	}
 	var b strings.Builder
 	for _, s := range sections {
@@ -132,16 +138,27 @@ func (tc *tableCode) headerSection() string {
 }
 
 func (tc *tableCode) importsSection() string {
-	// time 仅在 Params 书写 *time.Time / []time.Time 字段时被引用;
+	spec := tc.spec
+	// time 引用来源:读面 Params(*time.Time / []time.Time)、Set 方法(*T)、
+	// Where 方法(value op)与 @pk 自动定位方法(类型矩阵)。
 	// 仅 is_null/not_null 的列只产 bool 字段,不引用列 GoType。
 	needTime := false
-	for _, c := range tc.spec.Columns {
-		if hasValueOp(c.Ops) && strings.Contains(c.GoType, "time.Time") {
+	for i := range spec.Columns {
+		c := &spec.Columns[i]
+		if !strings.Contains(c.GoType, "time.Time") {
+			continue
+		}
+		if spec.ReadEnabled && hasValueOp(c.Ops) {
+			needTime = true
+		}
+		// Set / Where 方法族与 @pk 自动定位矩阵只在更新面启用时生成;
+		// 只读表(无 set-capable 或 @update: false)不得因此引入无用 import。
+		if spec.UpdateEnabled && (c.SetCapable || hasValueOp(c.UpdateOps) || (spec.ReadEnabled && c.Key == spec.Tiebreaker)) {
 			needTime = true
 		}
 	}
 	needJSON := false
-	for _, p := range tc.spec.ScopeParams {
+	for _, p := range spec.ScopeParams {
 		if p.GoType == "json.RawMessage" {
 			needJSON = true
 		}
@@ -154,7 +171,10 @@ func (tc *tableCode) importsSection() string {
 	if needTime {
 		std = append(std, `"time"`)
 	}
-	rest = append(rest, `sq "github.com/Masterminds/squirrel"`, `"github.com/jackc/pgx/v5"`)
+	rest = append(rest, `sq "github.com/Masterminds/squirrel"`)
+	if spec.ReadEnabled {
+		rest = append(rest, `"github.com/jackc/pgx/v5"`)
+	}
 	if tc.opts.ModelImport != "" {
 		rest = append(rest, fmt.Sprintf("%s %q", tc.opts.ModelPackage, tc.opts.ModelImport))
 	}
@@ -394,9 +414,8 @@ func (tc *tableCode) paramsSection() string {
 
 // orderedOps 按 canonical 顺序返回 ops。
 func orderedOps(ops []string) []string {
-	canonical := []string{"eq", "neq", "in", "not_in", "gt", "gte", "lt", "lte", "between", "contains", "prefix", "suffix", "is_null", "not_null", "has"}
 	var out []string
-	for _, c := range canonical {
+	for _, c := range canonicalOpOrder {
 		for _, op := range ops {
 			if op == c {
 				out = append(out, op)

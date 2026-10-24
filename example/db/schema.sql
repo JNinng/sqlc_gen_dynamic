@@ -26,21 +26,21 @@ CREATE TABLE users (
 );
 
 COMMENT ON COLUMN users.id         IS 'ID [@dynamic: exact, in @sortable @hideable]';
-COMMENT ON COLUMN users.name       IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable]';
-COMMENT ON COLUMN users.email      IS '用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable]';
-COMMENT ON COLUMN users.password   IS '密码 [@internal]';
-COMMENT ON COLUMN users.status     IS '状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable]';
-COMMENT ON COLUMN users.role       IS '角色 [@dynamic: fuzzy @sortable]';
-COMMENT ON COLUMN users.age        IS '年龄 [@dynamic: exact, in, range @sortable @hideable]';
-COMMENT ON COLUMN users.score      IS '评分 [0-100] [@dynamic: range @sortable @hideable]';
-COMMENT ON COLUMN users.balance    IS '余额 [元] [@dynamic: range @hideable]';
-COMMENT ON COLUMN users.birth_date IS '生日 [@dynamic: eq, range @hideable]';
-COMMENT ON COLUMN users.org_id     IS '组织ID [@dynamic: exact, in]';
-COMMENT ON COLUMN users.tags       IS '标签 [@dynamic: in @hideable]';
-COMMENT ON COLUMN users.meta       IS '元数据 [@dynamic: has]';
+COMMENT ON COLUMN users.name       IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable @updatable]';
+COMMENT ON COLUMN users.email      IS '用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable @updatable: set]';
+COMMENT ON COLUMN users.password   IS '密码 [@internal @updatable]';
+COMMENT ON COLUMN users.status     IS '状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable @updatable]';
+COMMENT ON COLUMN users.role       IS '角色 [@dynamic: fuzzy @sortable @updatable: exact]';
+COMMENT ON COLUMN users.age        IS '年龄 [@dynamic: exact, in, range @sortable @hideable @updatable: eq, range]';
+COMMENT ON COLUMN users.score      IS '评分 [0-100] [@dynamic: range @sortable @hideable @updatable: set]';
+COMMENT ON COLUMN users.balance    IS '余额 [元] [@dynamic: range @hideable @updatable: set]';
+COMMENT ON COLUMN users.birth_date IS '生日 [@dynamic: eq, range @hideable @updatable: false]';
+COMMENT ON COLUMN users.org_id     IS '组织ID [@dynamic: exact, in @updatable: where]';
+COMMENT ON COLUMN users.tags       IS '标签 [@dynamic: in @hideable @updatable]';
+COMMENT ON COLUMN users.meta       IS '元数据 [@dynamic: has @updatable: set]';
 COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range @sortable @hideable]';
-COMMENT ON COLUMN users.updated_at IS '更新时间 [@dynamic: range, is_null, not_null @sortable]';
-COMMENT ON COLUMN users.deleted_at IS '删除时间 [@dynamic: is_null, not_null]';
+COMMENT ON COLUMN users.updated_at IS '更新时间 [@dynamic: range, is_null, not_null @sortable @updatable: eq, is_null]';
+COMMENT ON COLUMN users.deleted_at IS '删除时间 [@dynamic: is_null, not_null @updatable: set]';
 COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null]';
 
 CREATE TABLE orders (
@@ -52,10 +52,10 @@ CREATE TABLE orders (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-COMMENT ON COLUMN orders.order_no IS '订单号 [@dynamic: exact, prefix @hideable]';
-COMMENT ON COLUMN orders.user_id  IS '用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name]';
-COMMENT ON COLUMN orders.amount_cents IS '金额（分） [@dynamic: range @sortable @hideable]';
-COMMENT ON COLUMN orders.status   IS '状态 [@dynamic: exact, in @sortable @hideable]';
+COMMENT ON COLUMN orders.order_no IS '订单号 [@dynamic: exact, prefix @hideable @updatable: set]';
+COMMENT ON COLUMN orders.user_id  IS '用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name @updatable: where]';
+COMMENT ON COLUMN orders.amount_cents IS '金额（分） [@dynamic: range @sortable @hideable @updatable: range]';
+COMMENT ON COLUMN orders.status   IS '状态 [@dynamic: exact, in @sortable @hideable @updatable: eq, neq]';
 COMMENT ON COLUMN orders.created_at IS '创建时间 [@dynamic: range @sortable @hideable]';
 COMMENT ON TABLE  orders          IS '订单表 [@default_sort: created_at DESC @pk: id @page: 20/100 @filter: amount_cents gte 0]';
 
@@ -80,7 +80,7 @@ CREATE TABLE sys_user (
 );
 
 COMMENT ON COLUMN sys_user.id   IS 'ID [@dynamic: exact]';
-COMMENT ON COLUMN sys_user.name IS '姓名 [@dynamic: fuzzy]';
+COMMENT ON COLUMN sys_user.name IS '姓名 [@dynamic: fuzzy @updatable]';
 COMMENT ON TABLE sys_user IS '员工表 [@scope: id in_any fn_perm_user_ids(user_id:varchar, scopes:int[]) @pk: id]';
 
 -- 显式共享授权:某资源的单条记录被显式共享给某用户(守卫函数消费)。
@@ -88,8 +88,15 @@ CREATE TABLE sys_resource_grant (
     resource  varchar(64) NOT NULL,
     user_id   varchar(64) NOT NULL,
     record_id bigint      NOT NULL,
+    note      TEXT,
     PRIMARY KEY (resource, user_id, record_id)
 );
+
+-- 无 @pk 表的更新面演示:键列 where-capable(复合定位)、note set-capable。
+COMMENT ON COLUMN sys_resource_grant.resource  IS '资源 [@updatable: where]';
+COMMENT ON COLUMN sys_resource_grant.user_id   IS '用户ID [@updatable: where]';
+COMMENT ON COLUMN sys_resource_grant.record_id IS '记录ID [@updatable: where]';
+COMMENT ON COLUMN sys_resource_grant.note      IS '备注 [@updatable: set]';
 
 -- fn_accessible_user_ids 返回 p_user_id 在 p_scopes(多角色并集,int[])下
 -- 可见的用户 ID 集合。显式参数(不读会话变量),STABLE 标记允许优化器复用;
@@ -203,13 +210,13 @@ CREATE TABLE customers (
 );
 
 COMMENT ON COLUMN customers.id   IS 'ID [@dynamic: exact @sortable @hideable]';
-COMMENT ON COLUMN customers.name IS '客户名 [@dynamic: fuzzy @sortable @hideable]';
-COMMENT ON COLUMN customers.amount_cents IS '金额（分） [@dynamic: range @sortable @hideable]';
+COMMENT ON COLUMN customers.name IS '客户名 [@dynamic: fuzzy @sortable @hideable @updatable]';
+COMMENT ON COLUMN customers.amount_cents IS '金额（分） [@dynamic: range @sortable @hideable @updatable: set]';
 COMMENT ON COLUMN customers.owner_user_id IS '归属用户ID [@internal]';
 COMMENT ON COLUMN customers.owner_dept_id IS '归属部门ID [@internal]';
 COMMENT ON COLUMN customers.created_at IS '创建时间 [@dynamic: range @sortable @hideable]';
 COMMENT ON COLUMN customers.deleted_at  IS '删除时间 [@dynamic: is_null, not_null]';
-COMMENT ON TABLE  customers IS '客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted(''customers'', user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]';
+COMMENT ON TABLE  customers IS '客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted(''customers'', user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @update: true]';
 
 -- projects 表:eq 标量守卫——租户隔离:tenant_id = fn_tenant_id(user_id)。
 CREATE TABLE projects (
@@ -221,7 +228,7 @@ CREATE TABLE projects (
 );
 
 COMMENT ON COLUMN projects.id   IS 'ID [@dynamic: exact @sortable @hideable]';
-COMMENT ON COLUMN projects.name IS '项目名 [@dynamic: fuzzy @sortable @hideable]';
+COMMENT ON COLUMN projects.name IS '项目名 [@dynamic: fuzzy @sortable @hideable @updatable]';
 COMMENT ON COLUMN projects.tenant_id IS '租户ID [@internal]';
 COMMENT ON COLUMN projects.owner_user_id IS '归属用户ID [@internal]';
 COMMENT ON COLUMN projects.created_at IS '创建时间 [@dynamic: range @sortable @hideable]';

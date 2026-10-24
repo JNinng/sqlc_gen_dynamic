@@ -11,7 +11,9 @@
 - 多守卫恒为 **OR 组合**(任一命中即可见);`buildXxxWhere` 头部按声明内联生成守卫谓词(零反射,编译期类型检查),与业务条件 AND;
 - IN-子查询与不相关标量函数在单条语句内只求值一次(`in_any` 谓词中 fn 出现两次——IS NULL 判别与 ANY 匹配,STABLE 函数两次调用结果一致);List 与 Count 共用 → **total 与 items 的权限视图天然一致**;
 - **fail-closed**:声明 `@scope` 的表,`params.Scope` 为 nil 时 List/Count 直接报错(`Kind=scope`),宁可拒绝服务也不静默退化为全量可见;
-- **协议门结构性隔离**:客户端 JSON 不存在设置 Scope 的通道,权限值只能来自服务端注入。
+- **协议门结构性隔离**:客户端 JSON 不存在设置 Scope 的通道,权限值只能来自服务端注入;
+- **写面不消费 Scope**:`UpdateXxx` 不取 `ScopeFromContext`、不平移权限谓词——`@scope` 只作用于读面。更新权限由“先查后改”保证:先用 List/Count 在权限视图内定位目标,再以唯一条件 Update;高风险场景用同事务 `SELECT ... FOR UPDATE` 锁行、PostgreSQL RLS 或静态条件 UPDATE 兜底 TOCTOU;
+- **`@filter` 不变量仍作用于写面**:它属于服务端固定条件(非权限输入),恒定 AND 进 UPDATE 的 WHERE,可由 `XxxUpdate.WithoutFilter()` 显式绕过。
 
 ## 调用形态
 
@@ -24,6 +26,13 @@ params, err := gen.ParseCustomersQuery(q)
 params.Scope = dynq.ScopeFromContext[gen.CustomersScope](ctx)
 items, err := gen.ListCustomers(ctx, db, params)
 total, err := gen.CountCustomers(ctx, db, params) // 同一 params → 同一权限视图
+
+// 写面不消费 Scope:先查后改——在权限视图内取目标 id,再点行更新。
+// 高风险场景应把 SELECT ... FOR UPDATE 与 UPDATE 放进同一事务(TOCTOU 兜底)。
+n, err := gen.UpdateCustomers(ctx, db,
+    gen.CustomerUpdate.SetAmountCents(15000),
+    gen.CustomerUpdate.WhereIDEq(7),
+)
 ```
 
 `Scope` 是 Params 的保留字段,与业务槽位"零值=条件不参与"不同——它为 nil 是显式错误。守卫谓词不占协议门的条件冲突槽位,与业务条件正交叠加(如权限视图内再按 `name contains` 收窄);`scopes int[]` 一类数组参数天然承载多角色并集语义(函数内 `= ANY`)。游标重放受权限谓词约束:权限收窄后旧游标最坏跳行/空页,不可能越权读到数据。

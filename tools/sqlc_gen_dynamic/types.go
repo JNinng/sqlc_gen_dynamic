@@ -159,6 +159,85 @@ func expandDynamicItems(where, dataType, payload string, nullable bool) ([]strin
 	return out, nil
 }
 
+// canonicalOpOrder 是 op 的规范输出顺序(预设展开、显式清单与 @pk 自动
+// 定位方法族共用,保证生成物稳定)。
+var canonicalOpOrder = []string{
+	"eq", "neq", "in", "not_in", "gt", "gte", "lt", "lte", "between",
+	"contains", "prefix", "suffix", "is_null", "not_null", "has",
+}
+
+// matrixOps 返回 dataType 的类型有效 op 集(auto / where 形态与 @pk 自动
+// 定位使用):严格按 §4.2 能力矩阵,不追加 null op。
+func matrixOps(dataType string) []string {
+	allowed := capabilityMatrix[dataType]
+	var out []string
+	for _, op := range canonicalOpOrder {
+		if allowed[op] {
+			out = append(out, op)
+		}
+	}
+	return out
+}
+
+// expandUpdatableItems 展开 @updatable 的显式清单。语义与 @dynamic 同构,
+// 但独立实现——expandDynamicItems 的 List 语义与报错文案是既存契约,不复用:
+//   - 预设项与类型能力取交集,如 int_array 列声明 in 时 not_in 被裁剪;
+//   - 显式 op 严格校验:类型不支持 → 生成期 fail;
+//   - is_null/not_null 仅可空列、仅显式声明;
+//   - 展开为空 → 生成期 fail;去重后按 canonical 序输出。
+func expandUpdatableItems(where, dataType, payload string, nullable bool) ([]string, error) {
+	allowed := capabilityMatrix[dataType]
+	var out []string
+	seen := map[string]bool{}
+	addStrict := func(op string) error {
+		if !knownOps[op] {
+			return fmt.Errorf("%s: unknown @updatable item %q", where, op)
+		}
+		if (op == "is_null" || op == "not_null") && !nullable {
+			return fmt.Errorf("%s: @updatable op %q declared on NOT NULL column", where, op)
+		}
+		if op != "is_null" && op != "not_null" && !allowed[op] {
+			return fmt.Errorf("%s: @updatable op %q not supported by dataType %s", where, op, dataType)
+		}
+		if !seen[op] {
+			seen[op] = true
+			out = append(out, op)
+		}
+		return nil
+	}
+	addIntersect := func(op string) {
+		if (op == "is_null" || op == "not_null") && !nullable {
+			return
+		}
+		if op != "is_null" && op != "not_null" && !allowed[op] {
+			return
+		}
+		if !seen[op] {
+			seen[op] = true
+			out = append(out, op)
+		}
+	}
+	for _, rawItem := range strings.Split(payload, ",") {
+		item := strings.TrimSpace(rawItem)
+		if item == "" {
+			return nil, fmt.Errorf("%s: empty @updatable item", where)
+		}
+		if preset, ok := presetOps[item]; ok {
+			for _, op := range preset {
+				addIntersect(op)
+			}
+			continue
+		}
+		if err := addStrict(item); err != nil {
+			return nil, err
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s: @updatable declares no supported ops for dataType %s", where, dataType)
+	}
+	return orderedOps(out), nil
+}
+
 // ---- 命名:与 sqlc-gen-go 保持一致的 snake_case → Go 名称转换 ----
 
 // commonInitialisms 与 sqlc-gen-go 的首字母缩写表核心子集一致。

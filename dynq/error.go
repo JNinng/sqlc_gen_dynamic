@@ -8,6 +8,7 @@ import (
 // Error kinds. Kind 为空表示由具体消费方(生成代码)补充定位信息。
 const (
 	KindWhere      = "where"
+	KindSet        = "set"
 	KindSort       = "sort"
 	KindFields     = "fields"
 	KindPagination = "pagination"

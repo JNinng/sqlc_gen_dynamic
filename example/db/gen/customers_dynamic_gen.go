@@ -5,10 +5,11 @@
 //	table customers: [@page: 20/100]
 //	table customers: [@default_sort: created_at DESC]
 //	table customers: [@pk: id]
+//	table customers: [@update: true]
 //	table customers: [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted('customers', user_id:varchar)]
 //	column customers.id: [@dynamic: eq, neq @sortable @hideable]
-//	column customers.name: [@dynamic: contains, prefix, suffix @sortable @hideable]
-//	column customers.amount_cents: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
+//	column customers.name: [@dynamic: contains, prefix, suffix @sortable @hideable @updatable]
+//	column customers.amount_cents: [@dynamic: gt, gte, lt, lte, between @sortable @hideable @updatable: set]
 //	column customers.owner_user_id: [@internal]
 //	column customers.owner_dept_id: [@internal]
 //	column customers.created_at: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
@@ -708,6 +709,223 @@ func CountCustomers(ctx context.Context, db DBTX, params ListCustomersParams, op
 		return 0, err
 	}
 	return total, nil
+}
+
+// CustomerTable 是本表 Update 方法族的编译期 marker:选项类型按表绑定,
+// 跨表误用(SET / WHERE 选项串表)在编译期被拒绝,而不是运行期报错。
+type CustomerTable struct{}
+
+// CustomerUpdate 是 Update 方法族的命名空间对象(如 CustomerUpdate.SetName)。
+// 取 XxxUpdate 而非表名单数:与 sqlc-gen-go 同包时模型类型已占用单数名
+// (如 sys_user → SysUser),命名空间对象不能复用。
+var CustomerUpdate CustomerTable
+
+// CustomerUpdateOption 是本表的更新选项别名。SET 资格面是列级 @updatable 的
+// set-capable 形态;WHERE 资格面是 where-capable 形态,有 @pk 时自动附带
+// 主键列的完整类型矩阵(定位方法)。两个能力面与 @dynamic / @scope 解耦。
+type CustomerUpdateOption = dynq.UpdateOption[CustomerTable]
+
+// ---- SET 白名单(set-capable @updatable 列;未调用的列保持原值)----
+
+// SetName 设置 name（客户名）列值，无 nil。
+func (CustomerTable) SetName(v string) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Set("name", "name", "", v)
+	}
+}
+
+// SetAmountCents 设置 amountCents（金额（分））列值，无 nil。
+func (CustomerTable) SetAmountCents(v int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Set("amountCents", "amount_cents", "", v)
+	}
+}
+
+// ---- WHERE 定位方法族(@pk 自动矩阵 + where-capable @updatable)----
+
+// WhereIDEq 追加 id 列 = 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereIDEq(v int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Where("id", dynq.OpEq, sq.Expr("id = ?", v))
+	}
+}
+
+// WhereIDNeq 追加 id 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereIDNeq(v int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Where("id", dynq.OpNeq, sq.Expr("id <> ?", v))
+	}
+}
+
+// WhereIDIn 追加 id 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereIDIn(vs ...int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		if err := dynq.CheckInLen("id", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpIn, sq.Expr("id IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereIDNotIn 追加 id 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereIDNotIn(vs ...int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		if err := dynq.CheckInLen("id", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpNotIn, sq.Expr("id NOT IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereIDGt 追加 id 列 > 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereIDGt(v int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Where("id", dynq.OpGt, sq.Expr("id > ?", v))
+	}
+}
+
+// WhereIDGte 追加 id 列 >= 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereIDGte(v int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Where("id", dynq.OpGte, sq.Expr("id >= ?", v))
+	}
+}
+
+// WhereIDLt 追加 id 列 < 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereIDLt(v int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Where("id", dynq.OpLt, sq.Expr("id < ?", v))
+	}
+}
+
+// WhereIDLte 追加 id 列 <= 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereIDLte(v int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Where("id", dynq.OpLte, sq.Expr("id <= ?", v))
+	}
+}
+
+// WhereIDBetween 追加 id 列 between 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereIDBetween(lo, hi int64) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		if lo > hi {
+			return dynq.ErrBetweenOrder("id")
+		}
+		if err := st.Where("id", dynq.OpGte, sq.Expr("id >= ?", lo)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpLte, sq.Expr("id <= ?", hi))
+	}
+}
+
+// WhereNameEq 追加 name 列 = 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereNameEq(v string) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Where("name", dynq.OpEq, sq.Expr("name = ?", v))
+	}
+}
+
+// WhereNameNeq 追加 name 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereNameNeq(v string) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		return st.Where("name", dynq.OpNeq, sq.Expr("name <> ?", v))
+	}
+}
+
+// WhereNameIn 追加 name 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereNameIn(vs ...string) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		if err := dynq.CheckInLen("name", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("name", dynq.OpIn, sq.Expr("name IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereNameNotIn 追加 name 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereNameNotIn(vs ...string) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		if err := dynq.CheckInLen("name", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("name", dynq.OpNotIn, sq.Expr("name NOT IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereNameContains 追加 name 列 ILIKE 包含 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereNameContains(v string) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("name")
+		}
+		return st.Where("name", dynq.OpContains, sq.Expr("name ILIKE ? ESCAPE '\\'", dynq.ContainsPattern(v)))
+	}
+}
+
+// WhereNamePrefix 追加 name 列 ILIKE 前缀 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereNamePrefix(v string) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("name")
+		}
+		return st.Where("name", dynq.OpPrefix, sq.Expr("name ILIKE ? ESCAPE '\\'", dynq.PrefixPattern(v)))
+	}
+}
+
+// WhereNameSuffix 追加 name 列 ILIKE 后缀 条件;多条 WHERE 之间恒为 AND。
+func (CustomerTable) WhereNameSuffix(v string) CustomerUpdateOption {
+	return func(st *dynq.UpdateState[CustomerTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("name")
+		}
+		return st.Where("name", dynq.OpSuffix, sq.Expr("name ILIKE ? ESCAPE '\\'", dynq.SuffixPattern(v)))
+	}
+}
+
+// UpdateCustomers 按 opts 收集的 SET / WHERE 组合更新行,返回实际改写行数。
+// SET 白名单与 WHERE 定位条件均来自列级 @updatable;有 @pk 时自动附带
+// 主键列的定位方法(类型矩阵)。@scope 不参与写面,权限由读取阶段保证。
+// 零 SET 或零调用方 WHERE 条件显式拒绝(Kind=set / where),不发全表 UPDATE,
+// 也不静默 no-op。
+//
+// 参数:
+//   - ctx: 更新上下文。
+//   - db:  数据库连接,满足 DBTX 接口即可。
+//   - opts: SET / WHERE 选项(CustomerUpdate.*),跨表选项编译期不可混用。
+//
+// 返回值:
+//   - int64: 实际改写行数;0 = 未命中(条件不匹配),不隐式特判。
+//   - error: 校验或执行失败时的错误。
+func UpdateCustomers(ctx context.Context, db DBTX, opts ...CustomerUpdateOption) (int64, error) {
+	st := dynq.NewUpdateState[CustomerTable]()
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(st); err != nil {
+			return 0, err
+		}
+	}
+	// 空 SET / 零 where 守卫:按调用方条件数计——@filter 叠加后最终 WHERE
+	// 恒非空,不得以最终 SQL 形态代替判断。
+	if err := st.Validate(); err != nil {
+		return 0, err
+	}
+	conds := make([]sq.Sqlizer, 0, len(st.Wheres()))
+	conds = append(conds, st.Wheres()...)
+	b := sq.Update("customers").PlaceholderFormat(sq.Dollar).Where(sq.And(conds))
+	for _, a := range st.Sets() {
+		b = b.Set(a.Column, sq.Expr("?"+a.Cast, a.Value))
+	}
+	query, args, err := b.ToSql()
+	if err != nil {
+		return 0, err
+	}
+	tag, err := db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // CustomersQuerySchema 是前端契约出口:返回经 opts 减法投影后的有效能力全集,

@@ -6,10 +6,10 @@
 //	table orders: [@default_sort: created_at DESC]
 //	table orders: [@pk: id]
 //	table orders: [@filter: amount_cents gte 0]
-//	column orders.order_no: [@dynamic: eq, neq, prefix @hideable]
-//	column orders.user_id: [@dynamic: eq, in, not_in @hideable @api: /api/v1/users/options value_key=id label_key=name]
-//	column orders.amount_cents: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
-//	column orders.status: [@dynamic: eq, neq, in, not_in @sortable @hideable]
+//	column orders.order_no: [@dynamic: eq, neq, prefix @hideable @updatable: set]
+//	column orders.user_id: [@dynamic: eq, in, not_in @hideable @updatable: where @api: /api/v1/users/options value_key=id label_key=name]
+//	column orders.amount_cents: [@dynamic: gt, gte, lt, lte, between @sortable @hideable @updatable: gt, gte, lt, lte, between]
+//	column orders.status: [@dynamic: eq, neq, in, not_in @sortable @hideable @updatable: eq, neq]
 //	column orders.created_at: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
 //
 // 逻辑键(camelCase)是对外契约;snake_case 物理列名仅在本文件内部使用。
@@ -737,6 +737,313 @@ func CountOrders(ctx context.Context, db DBTX, params ListOrdersParams, opts ...
 		return 0, err
 	}
 	return total, nil
+}
+
+// OrderTable 是本表 Update 方法族的编译期 marker:选项类型按表绑定,
+// 跨表误用(SET / WHERE 选项串表)在编译期被拒绝,而不是运行期报错。
+type OrderTable struct{}
+
+// OrderUpdate 是 Update 方法族的命名空间对象(如 OrderUpdate.SetName)。
+// 取 XxxUpdate 而非表名单数:与 sqlc-gen-go 同包时模型类型已占用单数名
+// (如 sys_user → SysUser),命名空间对象不能复用。
+var OrderUpdate OrderTable
+
+// OrderUpdateOption 是本表的更新选项别名。SET 资格面是列级 @updatable 的
+// set-capable 形态;WHERE 资格面是 where-capable 形态,有 @pk 时自动附带
+// 主键列的完整类型矩阵(定位方法)。两个能力面与 @dynamic / @scope 解耦。
+type OrderUpdateOption = dynq.UpdateOption[OrderTable]
+
+// ---- SET 白名单(set-capable @updatable 列;未调用的列保持原值)----
+
+// SetOrderNo 设置 orderNo（订单号）列值，无 nil。
+func (OrderTable) SetOrderNo(v string) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Set("orderNo", "order_no", "", v)
+	}
+}
+
+// SetAmountCents 设置 amountCents（金额（分））列值，无 nil。
+func (OrderTable) SetAmountCents(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Set("amountCents", "amount_cents", "", v)
+	}
+}
+
+// SetStatus 设置 status（状态）列值，无 nil。
+func (OrderTable) SetStatus(v OrderStatus) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Set("status", "status", "::order_status", v)
+	}
+}
+
+// ---- @filter 绕过 ----
+
+// WithoutFilter 绕过本表的 @filter 不变量(幂等;不豁免零 where 守卫)。
+// 典型用途:恢复被软删不变量挡住的历史行;绕过是整表级开关,不做条件细化。
+func (OrderTable) WithoutFilter() OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		st.BypassFilter()
+		return nil
+	}
+}
+
+// ---- WHERE 定位方法族(@pk 自动矩阵 + where-capable @updatable)----
+
+// WhereIDEq 追加 id 列 = 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereIDEq(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("id", dynq.OpEq, sq.Expr("id = ?", v))
+	}
+}
+
+// WhereIDNeq 追加 id 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereIDNeq(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("id", dynq.OpNeq, sq.Expr("id <> ?", v))
+	}
+}
+
+// WhereIDIn 追加 id 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereIDIn(vs ...int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		if err := dynq.CheckInLen("id", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpIn, sq.Expr("id IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereIDNotIn 追加 id 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereIDNotIn(vs ...int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		if err := dynq.CheckInLen("id", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpNotIn, sq.Expr("id NOT IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereIDGt 追加 id 列 > 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereIDGt(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("id", dynq.OpGt, sq.Expr("id > ?", v))
+	}
+}
+
+// WhereIDGte 追加 id 列 >= 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereIDGte(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("id", dynq.OpGte, sq.Expr("id >= ?", v))
+	}
+}
+
+// WhereIDLt 追加 id 列 < 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereIDLt(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("id", dynq.OpLt, sq.Expr("id < ?", v))
+	}
+}
+
+// WhereIDLte 追加 id 列 <= 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereIDLte(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("id", dynq.OpLte, sq.Expr("id <= ?", v))
+	}
+}
+
+// WhereIDBetween 追加 id 列 between 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereIDBetween(lo, hi int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		if lo > hi {
+			return dynq.ErrBetweenOrder("id")
+		}
+		if err := st.Where("id", dynq.OpGte, sq.Expr("id >= ?", lo)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpLte, sq.Expr("id <= ?", hi))
+	}
+}
+
+// WhereUserIDEq 追加 userId 列 = 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereUserIDEq(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("userId", dynq.OpEq, sq.Expr("user_id = ?", v))
+	}
+}
+
+// WhereUserIDNeq 追加 userId 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereUserIDNeq(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("userId", dynq.OpNeq, sq.Expr("user_id <> ?", v))
+	}
+}
+
+// WhereUserIDIn 追加 userId 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereUserIDIn(vs ...int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		if err := dynq.CheckInLen("userId", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("userId", dynq.OpIn, sq.Expr("user_id IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereUserIDNotIn 追加 userId 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereUserIDNotIn(vs ...int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		if err := dynq.CheckInLen("userId", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("userId", dynq.OpNotIn, sq.Expr("user_id NOT IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereUserIDGt 追加 userId 列 > 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereUserIDGt(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("userId", dynq.OpGt, sq.Expr("user_id > ?", v))
+	}
+}
+
+// WhereUserIDGte 追加 userId 列 >= 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereUserIDGte(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("userId", dynq.OpGte, sq.Expr("user_id >= ?", v))
+	}
+}
+
+// WhereUserIDLt 追加 userId 列 < 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereUserIDLt(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("userId", dynq.OpLt, sq.Expr("user_id < ?", v))
+	}
+}
+
+// WhereUserIDLte 追加 userId 列 <= 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereUserIDLte(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("userId", dynq.OpLte, sq.Expr("user_id <= ?", v))
+	}
+}
+
+// WhereUserIDBetween 追加 userId 列 between 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereUserIDBetween(lo, hi int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		if lo > hi {
+			return dynq.ErrBetweenOrder("userId")
+		}
+		if err := st.Where("userId", dynq.OpGte, sq.Expr("user_id >= ?", lo)); err != nil {
+			return err
+		}
+		return st.Where("userId", dynq.OpLte, sq.Expr("user_id <= ?", hi))
+	}
+}
+
+// WhereAmountCentsGt 追加 amountCents 列 > 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereAmountCentsGt(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("amountCents", dynq.OpGt, sq.Expr("amount_cents > ?", v))
+	}
+}
+
+// WhereAmountCentsGte 追加 amountCents 列 >= 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereAmountCentsGte(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("amountCents", dynq.OpGte, sq.Expr("amount_cents >= ?", v))
+	}
+}
+
+// WhereAmountCentsLt 追加 amountCents 列 < 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereAmountCentsLt(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("amountCents", dynq.OpLt, sq.Expr("amount_cents < ?", v))
+	}
+}
+
+// WhereAmountCentsLte 追加 amountCents 列 <= 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereAmountCentsLte(v int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("amountCents", dynq.OpLte, sq.Expr("amount_cents <= ?", v))
+	}
+}
+
+// WhereAmountCentsBetween 追加 amountCents 列 between 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereAmountCentsBetween(lo, hi int64) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		if lo > hi {
+			return dynq.ErrBetweenOrder("amountCents")
+		}
+		if err := st.Where("amountCents", dynq.OpGte, sq.Expr("amount_cents >= ?", lo)); err != nil {
+			return err
+		}
+		return st.Where("amountCents", dynq.OpLte, sq.Expr("amount_cents <= ?", hi))
+	}
+}
+
+// WhereStatusEq 追加 status 列 = 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereStatusEq(v OrderStatus) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("status", dynq.OpEq, sq.Expr("status = ?::order_status", v))
+	}
+}
+
+// WhereStatusNeq 追加 status 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (OrderTable) WhereStatusNeq(v OrderStatus) OrderUpdateOption {
+	return func(st *dynq.UpdateState[OrderTable]) error {
+		return st.Where("status", dynq.OpNeq, sq.Expr("status <> ?::order_status", v))
+	}
+}
+
+// UpdateOrders 按 opts 收集的 SET / WHERE 组合更新行,返回实际改写行数。
+// SET 白名单与 WHERE 定位条件均来自列级 @updatable;有 @pk 时自动附带
+// 主键列的定位方法(类型矩阵)。@scope 不参与写面,权限由读取阶段保证。
+// 零 SET 或零调用方 WHERE 条件显式拒绝(Kind=set / where),不发全表 UPDATE,
+// 也不静默 no-op。
+// @filter 不变量恒定 AND 进 WHERE;WithoutFilter() 可整体绕过,但不豁免
+// 零 where 守卫。
+//
+// 参数:
+//   - ctx: 更新上下文。
+//   - db:  数据库连接,满足 DBTX 接口即可。
+//   - opts: SET / WHERE 选项(OrderUpdate.*),跨表选项编译期不可混用。
+//
+// 返回值:
+//   - int64: 实际改写行数;0 = 未命中(条件不匹配),不隐式特判。
+//   - error: 校验或执行失败时的错误。
+func UpdateOrders(ctx context.Context, db DBTX, opts ...OrderUpdateOption) (int64, error) {
+	st := dynq.NewUpdateState[OrderTable]()
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(st); err != nil {
+			return 0, err
+		}
+	}
+	// 空 SET / 零 where 守卫:按调用方条件数计——@filter 叠加后最终 WHERE
+	// 恒非空,不得以最终 SQL 形态代替判断。
+	if err := st.Validate(); err != nil {
+		return 0, err
+	}
+	conds := make([]sq.Sqlizer, 0, 1+len(st.Wheres()))
+	// 恒定条件:@filter 服务端不变量(WithoutFilter 可绕过),与调用方条件 AND。
+	if !st.FilterBypassed() {
+		conds = append(conds, sq.Expr("amount_cents >= ?", 0))
+	}
+	conds = append(conds, st.Wheres()...)
+	b := sq.Update("orders").PlaceholderFormat(sq.Dollar).Where(sq.And(conds))
+	for _, a := range st.Sets() {
+		b = b.Set(a.Column, sq.Expr("?"+a.Cast, a.Value))
+	}
+	query, args, err := b.ToSql()
+	if err != nil {
+		return 0, err
+	}
+	tag, err := db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // OrdersQuerySchema 是前端契约出口:返回经 opts 减法投影后的有效能力全集,

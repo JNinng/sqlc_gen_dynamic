@@ -7,21 +7,21 @@
 //	table users: [@pk: id]
 //	table users: [@filter: deleted_at is_null]
 //	column users.id: [@dynamic: eq, neq, in, not_in @sortable @hideable]
-//	column users.name: [@dynamic: contains, prefix, suffix, eq, neq @sortable @hideable]
-//	column users.email: [@dynamic: eq, neq, in, not_in, prefix @hideable]
-//	column users.password: [@internal]
-//	column users.status: [@dynamic: eq, neq, in, not_in @sortable @hideable]
-//	column users.role: [@dynamic: contains, prefix, suffix @sortable]
-//	column users.age: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @hideable]
-//	column users.score: [@dynamic: gt, gte, lt, lte, between @sortable @hideable]
-//	column users.balance: [@dynamic: gt, gte, lt, lte, between @hideable]
-//	column users.birth_date: [@dynamic: eq, gt, gte, lt, lte, between @hideable]
-//	column users.org_id: [@dynamic: eq, neq, in, not_in]
-//	column users.tags: [@dynamic: in @hideable]
-//	column users.meta: [@dynamic: has]
+//	column users.name: [@dynamic: contains, prefix, suffix, eq, neq @sortable @hideable @updatable]
+//	column users.email: [@dynamic: eq, neq, in, not_in, prefix @hideable @updatable: set]
+//	column users.password: [@internal @updatable]
+//	column users.status: [@dynamic: eq, neq, in, not_in @sortable @hideable @updatable]
+//	column users.role: [@dynamic: contains, prefix, suffix @sortable @updatable: eq, neq]
+//	column users.age: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @hideable @updatable: eq, gt, gte, lt, lte, between]
+//	column users.score: [@dynamic: gt, gte, lt, lte, between @sortable @hideable @updatable: set]
+//	column users.balance: [@dynamic: gt, gte, lt, lte, between @hideable @updatable: set]
+//	column users.birth_date: [@dynamic: eq, gt, gte, lt, lte, between @hideable @updatable: false]
+//	column users.org_id: [@dynamic: eq, neq, in, not_in @updatable: where]
+//	column users.tags: [@dynamic: in @hideable @updatable]
+//	column users.meta: [@dynamic: has @updatable: set]
 //	column users.created_at: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @hideable]
-//	column users.updated_at: [@dynamic: gt, gte, lt, lte, between, is_null, not_null @sortable]
-//	column users.deleted_at: [@dynamic: is_null, not_null]
+//	column users.updated_at: [@dynamic: gt, gte, lt, lte, between, is_null, not_null @sortable @updatable: eq, is_null]
+//	column users.deleted_at: [@dynamic: is_null, not_null @updatable: set]
 //
 // 逻辑键(camelCase)是对外契约;snake_case 物理列名仅在本文件内部使用。
 package gen
@@ -1638,6 +1638,528 @@ func CountUsers(ctx context.Context, db DBTX, params ListUsersParams, opts ...dy
 		return 0, err
 	}
 	return total, nil
+}
+
+// UserTable 是本表 Update 方法族的编译期 marker:选项类型按表绑定,
+// 跨表误用(SET / WHERE 选项串表)在编译期被拒绝,而不是运行期报错。
+type UserTable struct{}
+
+// UserUpdate 是 Update 方法族的命名空间对象(如 UserUpdate.SetName)。
+// 取 XxxUpdate 而非表名单数:与 sqlc-gen-go 同包时模型类型已占用单数名
+// (如 sys_user → SysUser),命名空间对象不能复用。
+var UserUpdate UserTable
+
+// UserUpdateOption 是本表的更新选项别名。SET 资格面是列级 @updatable 的
+// set-capable 形态;WHERE 资格面是 where-capable 形态,有 @pk 时自动附带
+// 主键列的完整类型矩阵(定位方法)。两个能力面与 @dynamic / @scope 解耦。
+type UserUpdateOption = dynq.UpdateOption[UserTable]
+
+// ---- SET 白名单(set-capable @updatable 列;未调用的列保持原值)----
+
+// SetName 设置 name（姓名）列值，无 nil。
+func (UserTable) SetName(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("name", "name", "", v)
+	}
+}
+
+// SetEmail 设置 email（用户邮箱，如 test@example.com）列值，无 nil。
+func (UserTable) SetEmail(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("email", "email", "", v)
+	}
+}
+
+// SetPassword 设置 password（密码）列值，无 nil。
+func (UserTable) SetPassword(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("password", "password", "", v)
+	}
+}
+
+// SetStatus 设置 status（状态 [已废弃，仅展示]）列值，无 nil。
+func (UserTable) SetStatus(v UserStatus) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("status", "status", "::user_status", v)
+	}
+}
+
+// SetRole 设置 role（角色）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。
+func (UserTable) SetRole(v *string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("role", "role", "", v)
+	}
+}
+
+// SetAge 设置 age（年龄）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。
+func (UserTable) SetAge(v *int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("age", "age", "", v)
+	}
+}
+
+// SetScore 设置 score（评分 [0-100]）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。
+func (UserTable) SetScore(v *float64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("score", "score", "", v)
+	}
+}
+
+// SetBalance 设置 balance（余额 [元]）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。
+func (UserTable) SetBalance(v *float64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("balance", "balance", "", v)
+	}
+}
+
+// SetTags 设置 tags（标签）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。
+func (UserTable) SetTags(v *[]int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("tags", "tags", "::int4[]", v)
+	}
+}
+
+// SetMeta 设置 meta（元数据）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。
+func (UserTable) SetMeta(v *[]byte) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("meta", "meta", "::jsonb", v)
+	}
+}
+
+// SetUpdatedAt 设置 updatedAt（更新时间）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。
+func (UserTable) SetUpdatedAt(v *time.Time) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("updatedAt", "updated_at", "", v)
+	}
+}
+
+// SetDeletedAt 设置 deletedAt（删除时间）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。
+func (UserTable) SetDeletedAt(v *time.Time) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Set("deletedAt", "deleted_at", "", v)
+	}
+}
+
+// ---- @filter 绕过 ----
+
+// WithoutFilter 绕过本表的 @filter 不变量(幂等;不豁免零 where 守卫)。
+// 典型用途:恢复被软删不变量挡住的历史行;绕过是整表级开关,不做条件细化。
+func (UserTable) WithoutFilter() UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		st.BypassFilter()
+		return nil
+	}
+}
+
+// ---- WHERE 定位方法族(@pk 自动矩阵 + where-capable @updatable)----
+
+// WhereIDEq 追加 id 列 = 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereIDEq(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("id", dynq.OpEq, sq.Expr("id = ?", v))
+	}
+}
+
+// WhereIDNeq 追加 id 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereIDNeq(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("id", dynq.OpNeq, sq.Expr("id <> ?", v))
+	}
+}
+
+// WhereIDIn 追加 id 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereIDIn(vs ...int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("id", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpIn, sq.Expr("id IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereIDNotIn 追加 id 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereIDNotIn(vs ...int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("id", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpNotIn, sq.Expr("id NOT IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereIDGt 追加 id 列 > 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereIDGt(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("id", dynq.OpGt, sq.Expr("id > ?", v))
+	}
+}
+
+// WhereIDGte 追加 id 列 >= 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereIDGte(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("id", dynq.OpGte, sq.Expr("id >= ?", v))
+	}
+}
+
+// WhereIDLt 追加 id 列 < 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereIDLt(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("id", dynq.OpLt, sq.Expr("id < ?", v))
+	}
+}
+
+// WhereIDLte 追加 id 列 <= 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereIDLte(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("id", dynq.OpLte, sq.Expr("id <= ?", v))
+	}
+}
+
+// WhereIDBetween 追加 id 列 between 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereIDBetween(lo, hi int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if lo > hi {
+			return dynq.ErrBetweenOrder("id")
+		}
+		if err := st.Where("id", dynq.OpGte, sq.Expr("id >= ?", lo)); err != nil {
+			return err
+		}
+		return st.Where("id", dynq.OpLte, sq.Expr("id <= ?", hi))
+	}
+}
+
+// WhereNameEq 追加 name 列 = 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereNameEq(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("name", dynq.OpEq, sq.Expr("name = ?", v))
+	}
+}
+
+// WhereNameNeq 追加 name 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereNameNeq(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("name", dynq.OpNeq, sq.Expr("name <> ?", v))
+	}
+}
+
+// WhereNameIn 追加 name 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereNameIn(vs ...string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("name", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("name", dynq.OpIn, sq.Expr("name IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereNameNotIn 追加 name 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereNameNotIn(vs ...string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("name", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("name", dynq.OpNotIn, sq.Expr("name NOT IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereNameContains 追加 name 列 ILIKE 包含 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereNameContains(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("name")
+		}
+		return st.Where("name", dynq.OpContains, sq.Expr("name ILIKE ? ESCAPE '\\'", dynq.ContainsPattern(v)))
+	}
+}
+
+// WhereNamePrefix 追加 name 列 ILIKE 前缀 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereNamePrefix(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("name")
+		}
+		return st.Where("name", dynq.OpPrefix, sq.Expr("name ILIKE ? ESCAPE '\\'", dynq.PrefixPattern(v)))
+	}
+}
+
+// WhereNameSuffix 追加 name 列 ILIKE 后缀 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereNameSuffix(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("name")
+		}
+		return st.Where("name", dynq.OpSuffix, sq.Expr("name ILIKE ? ESCAPE '\\'", dynq.SuffixPattern(v)))
+	}
+}
+
+// WherePasswordEq 追加 password 列 = 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WherePasswordEq(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("password", dynq.OpEq, sq.Expr("password = ?", v))
+	}
+}
+
+// WherePasswordNeq 追加 password 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WherePasswordNeq(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("password", dynq.OpNeq, sq.Expr("password <> ?", v))
+	}
+}
+
+// WherePasswordIn 追加 password 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WherePasswordIn(vs ...string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("password", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("password", dynq.OpIn, sq.Expr("password IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WherePasswordNotIn 追加 password 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WherePasswordNotIn(vs ...string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("password", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("password", dynq.OpNotIn, sq.Expr("password NOT IN ("+dynq.Placeholders(len(vs))+")", dynq.Anys(vs)...))
+	}
+}
+
+// WherePasswordContains 追加 password 列 ILIKE 包含 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WherePasswordContains(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("password")
+		}
+		return st.Where("password", dynq.OpContains, sq.Expr("password ILIKE ? ESCAPE '\\'", dynq.ContainsPattern(v)))
+	}
+}
+
+// WherePasswordPrefix 追加 password 列 ILIKE 前缀 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WherePasswordPrefix(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("password")
+		}
+		return st.Where("password", dynq.OpPrefix, sq.Expr("password ILIKE ? ESCAPE '\\'", dynq.PrefixPattern(v)))
+	}
+}
+
+// WherePasswordSuffix 追加 password 列 ILIKE 后缀 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WherePasswordSuffix(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if v == "" {
+			return dynq.ErrEmptyPattern("password")
+		}
+		return st.Where("password", dynq.OpSuffix, sq.Expr("password ILIKE ? ESCAPE '\\'", dynq.SuffixPattern(v)))
+	}
+}
+
+// WhereStatusEq 追加 status 列 = 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereStatusEq(v UserStatus) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("status", dynq.OpEq, sq.Expr("status = ?::user_status", v))
+	}
+}
+
+// WhereStatusNeq 追加 status 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereStatusNeq(v UserStatus) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("status", dynq.OpNeq, sq.Expr("status <> ?::user_status", v))
+	}
+}
+
+// WhereStatusIn 追加 status 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereStatusIn(vs ...UserStatus) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("status", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("status", dynq.OpIn, sq.Expr("status IN ("+dynq.PlaceholdersCast(len(vs), "::user_status")+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereStatusNotIn 追加 status 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereStatusNotIn(vs ...UserStatus) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("status", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("status", dynq.OpNotIn, sq.Expr("status NOT IN ("+dynq.PlaceholdersCast(len(vs), "::user_status")+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereRoleEq 追加 role 列 = 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereRoleEq(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("role", dynq.OpEq, sq.Expr("role = ?", v))
+	}
+}
+
+// WhereRoleNeq 追加 role 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereRoleNeq(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("role", dynq.OpNeq, sq.Expr("role <> ?", v))
+	}
+}
+
+// WhereAgeEq 追加 age 列 = 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereAgeEq(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("age", dynq.OpEq, sq.Expr("age = ?", v))
+	}
+}
+
+// WhereAgeGt 追加 age 列 > 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereAgeGt(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("age", dynq.OpGt, sq.Expr("age > ?", v))
+	}
+}
+
+// WhereAgeGte 追加 age 列 >= 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereAgeGte(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("age", dynq.OpGte, sq.Expr("age >= ?", v))
+	}
+}
+
+// WhereAgeLt 追加 age 列 < 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereAgeLt(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("age", dynq.OpLt, sq.Expr("age < ?", v))
+	}
+}
+
+// WhereAgeLte 追加 age 列 <= 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereAgeLte(v int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("age", dynq.OpLte, sq.Expr("age <= ?", v))
+	}
+}
+
+// WhereAgeBetween 追加 age 列 between 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereAgeBetween(lo, hi int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if lo > hi {
+			return dynq.ErrBetweenOrder("age")
+		}
+		if err := st.Where("age", dynq.OpGte, sq.Expr("age >= ?", lo)); err != nil {
+			return err
+		}
+		return st.Where("age", dynq.OpLte, sq.Expr("age <= ?", hi))
+	}
+}
+
+// WhereOrgIDEq 追加 orgId 列 = 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereOrgIDEq(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("orgId", dynq.OpEq, sq.Expr("org_id = ?::uuid", v))
+	}
+}
+
+// WhereOrgIDNeq 追加 orgId 列 <> 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereOrgIDNeq(v string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("orgId", dynq.OpNeq, sq.Expr("org_id <> ?::uuid", v))
+	}
+}
+
+// WhereOrgIDIn 追加 orgId 列 IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereOrgIDIn(vs ...string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("orgId", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("orgId", dynq.OpIn, sq.Expr("org_id IN ("+dynq.PlaceholdersCast(len(vs), "::uuid")+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereOrgIDNotIn 追加 orgId 列 NOT IN 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereOrgIDNotIn(vs ...string) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("orgId", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("orgId", dynq.OpNotIn, sq.Expr("org_id NOT IN ("+dynq.PlaceholdersCast(len(vs), "::uuid")+")", dynq.Anys(vs)...))
+	}
+}
+
+// WhereTagsIn 追加 tags 列 && 重叠 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereTagsIn(vs []int64) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		if err := dynq.CheckInLen("tags", len(vs)); err != nil {
+			return err
+		}
+		return st.Where("tags", dynq.OpIn, sq.Expr("tags && ?::int4[]", vs))
+	}
+}
+
+// WhereUpdatedAtEq 追加 updatedAt 列 = 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereUpdatedAtEq(v time.Time) UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("updatedAt", dynq.OpEq, sq.Expr("updated_at = ?", v))
+	}
+}
+
+// WhereUpdatedAtIsNull 追加 updatedAt 列 IS NULL 条件;多条 WHERE 之间恒为 AND。
+func (UserTable) WhereUpdatedAtIsNull() UserUpdateOption {
+	return func(st *dynq.UpdateState[UserTable]) error {
+		return st.Where("updatedAt", dynq.OpIsNull, sq.Expr("updated_at IS NULL"))
+	}
+}
+
+// UpdateUsers 按 opts 收集的 SET / WHERE 组合更新行,返回实际改写行数。
+// SET 白名单与 WHERE 定位条件均来自列级 @updatable;有 @pk 时自动附带
+// 主键列的定位方法(类型矩阵)。@scope 不参与写面,权限由读取阶段保证。
+// 零 SET 或零调用方 WHERE 条件显式拒绝(Kind=set / where),不发全表 UPDATE,
+// 也不静默 no-op。
+// @filter 不变量恒定 AND 进 WHERE;WithoutFilter() 可整体绕过,但不豁免
+// 零 where 守卫。
+//
+// 参数:
+//   - ctx: 更新上下文。
+//   - db:  数据库连接,满足 DBTX 接口即可。
+//   - opts: SET / WHERE 选项(UserUpdate.*),跨表选项编译期不可混用。
+//
+// 返回值:
+//   - int64: 实际改写行数;0 = 未命中(条件不匹配),不隐式特判。
+//   - error: 校验或执行失败时的错误。
+func UpdateUsers(ctx context.Context, db DBTX, opts ...UserUpdateOption) (int64, error) {
+	st := dynq.NewUpdateState[UserTable]()
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(st); err != nil {
+			return 0, err
+		}
+	}
+	// 空 SET / 零 where 守卫:按调用方条件数计——@filter 叠加后最终 WHERE
+	// 恒非空,不得以最终 SQL 形态代替判断。
+	if err := st.Validate(); err != nil {
+		return 0, err
+	}
+	conds := make([]sq.Sqlizer, 0, 1+len(st.Wheres()))
+	// 恒定条件:@filter 服务端不变量(WithoutFilter 可绕过),与调用方条件 AND。
+	if !st.FilterBypassed() {
+		conds = append(conds, sq.Expr("deleted_at IS NULL"))
+	}
+	conds = append(conds, st.Wheres()...)
+	b := sq.Update("users").PlaceholderFormat(sq.Dollar).Where(sq.And(conds))
+	for _, a := range st.Sets() {
+		b = b.Set(a.Column, sq.Expr("?"+a.Cast, a.Value))
+	}
+	query, args, err := b.ToSql()
+	if err != nil {
+		return 0, err
+	}
+	tag, err := db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // UsersQuerySchema 是前端契约出口:返回经 opts 减法投影后的有效能力全集,

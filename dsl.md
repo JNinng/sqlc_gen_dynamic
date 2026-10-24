@@ -51,7 +51,7 @@ COMMENT ON COLUMN users.status IS '状态 [已废弃，仅展示] [@dynamic: exa
 | 指令块以 `@` 起始     | 进入指令解析                                                                                                                                                                                                                                |
 | 非指令块方括号         | 原样保留为 label                                                                                                                                                                                                                           |
 | 同列多指令块          | 按出现顺序合并;同名指令去重(等价于声明一次)                                                                                                                                                                                                               |
-| 指令名白名单          | 列级:`@dynamic` / `@sortable` / `@internal` / `@hideable` / `@api`;表级:`@default_sort` / `@page` / `@pk` / `@scope`。旧名 `@hidden` / `@selectable` 为兼容期别名(解析等价 + deprecation 提示,见 §2.6)。未知 `@xxx`(如 `@sortble` 手误) → 生成期 fail(fail 文案只列新名) |
+| 指令名白名单          | 列级:`@dynamic` / `@sortable` / `@internal` / `@hideable` / `@updatable` / `@api`;表级:`@default_sort` / `@page` / `@pk` / `@update` / `@scope` / `@filter`。旧名 `@hidden` / `@selectable` 为兼容期别名(解析等价 + deprecation 提示,见 §2.7)。未知 `@xxx`(如 `@sortble` 手误) → 生成期 fail(fail 文案只列新名) |
 | 指令块内 payload    | `@name: payload` 形式,payload 可含空格(如 `created_at DESC`);遇到下一个 `@token` 结束                                                                                                                                                               |
 | 块内成对 `[ ]` 不终止块 | `@scope` 类型标记 `int[]` / `varchar[]` 的方括号被识别为成对,不误终止指令块                                                                                                                                                                                |
 
@@ -135,7 +135,7 @@ COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range 
 
 ### 2.3 `@hideable`
 
-> 旧名 `@selectable` 为弃用别名:解析等价,生成期输出 deprecation 提示(见 §2.6)。
+> 旧名 `@selectable` 为弃用别名:解析等价,生成期输出 deprecation 提示(见 §2.7)。
 
 **语法**
 
@@ -159,7 +159,7 @@ COMMENT ON COLUMN users.name IS '姓名 [@dynamic: fuzzy, exact @sortable @hidea
 
 ### 2.4 `@internal`
 
-> 旧名 `@hidden` 为弃用别名:解析等价,生成期输出 deprecation 提示(见 §2.6)。
+> 旧名 `@hidden` 为弃用别名:解析等价,生成期输出 deprecation 提示(见 §2.7)。
 
 **语法**
 
@@ -183,7 +183,7 @@ COMMENT ON COLUMN customers.owner_user_id IS '归属用户ID [@internal]';
 
 全能力排除:该列不会被返回(不可写进 `fields`)、不可过滤、不可排序、不出现在 schema 输出中、不参与游标。只能通过 sqlc 的静态查询读到。
 
-- 与 `@dynamic` / `@sortable` / `@hideable` / `@api` 任一组合声明 → 生成期 fail;
+- 与 `@dynamic` / `@sortable` / `@hideable` / `@api` 任一组合声明 → 生成期 fail;`@updatable` 例外——写能力与协议可见性正交,`@internal` + `@updatable` 合法(服务端可写、协议不可见,如 `password`);
 - `@pk` 列不可 `@internal`(主键必须始终出现在返回列中,并作为游标列);
 - 典型用途:权限守卫列(如 `owner_user_id`)、敏感字段(如 `password`)。
 
@@ -243,7 +243,68 @@ COMMENT ON COLUMN orders.user_id IS '用户ID [@api: /api/v1/users/options value
 
 **`@api`** **是纯前端 schema 契约**:不参与服务端校验路径(ID 值仍走原有类型收敛与参数化)。完整契约(响应信封、mode 语义、翻页、复用生成方法的字段名匹配)见 [schema.md @api 契约](./schema.md#api-契约引用字段选项数据源)。
 
-### 2.6 指令命名对照与弃用时间线
+### 2.6 `@updatable`
+
+**语法**
+
+```
+@updatable
+@updatable: auto | set | where | false
+@updatable: <preset|op>, <preset|op>, ...
+```
+
+**举例**
+
+```sql
+-- 五形态:裸(auto)/ set-only / where-only / 惰性 / 显式清单
+COMMENT ON COLUMN users.name       IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable @updatable]';
+COMMENT ON COLUMN users.email      IS '用户邮箱 [@dynamic: exact, in @updatable: set]';
+COMMENT ON COLUMN users.org_id     IS '组织ID [@dynamic: exact, in @updatable: where]';
+COMMENT ON COLUMN users.birth_date IS '生日 [@dynamic: eq, range @updatable: false]';
+COMMENT ON COLUMN users.age        IS '年龄 [@dynamic: exact, in, range @updatable: eq, range]';
+COMMENT ON COLUMN users.password   IS '密码 [@internal @updatable]';
+```
+
+**描述**
+
+声明该列在动态 Update 面上的能力。命名对齐 PG updatable views——`@updatable` 的语义是"可进动态 Update",而非列在 SQL 层的可变性(任何列都可被静态 `UPDATE` 改)。**与读面完全解耦**:`@dynamic` 管 List 的过滤能力,`@updatable` 管 Update 的 SET / WHERE 能力,二者互不影响。
+
+| 形态                          | SET 方法 | WHERE 方法 | op 来源                          |
+| --------------------------- | ------ | -------- | ------------------------------ |
+| `@updatable` / `@updatable: auto` | ✓      | ✓        | 类型能力矩阵(§4.2,不含 null op)     |
+| `@updatable: set`           | ✓      | ✗        | —                              |
+| `@updatable: where`         | ✗      | ✓        | 类型能力矩阵(不含 null op)            |
+| `@updatable: false`         | ✗      | ✗        | —(惰性声明,不参与任何判定)                |
+| `@updatable: <preset\|op>, ...` | ✓      | ✓        | 显式清单(auto 失效,见下)             |
+
+**op 语义**(与 `@dynamic` 同构):
+
+- 预设(`exact` / `in` / `range` / `fuzzy` / `has`)与类型能力取交集,类型不支持的项被裁剪而不报错;
+- 显式 op 严格校验:类型不支持 → 生成期 fail;`is_null` / `not_null` 仅可空列、且只能显式声明(auto / where 不自动授予 null op);
+- 展开为空 → 生成期 fail;去重后按 canonical 序输出;
+- 保留形态词(`auto` / `set` / `where` / `false`)**只能单独出现**,与 op 项混写(如 `@updatable: set, eq`)→ 生成期 fail;
+- 同列重复 `@updatable` 取首条(与 `@dynamic` 一致);
+- **运行期值域守卫**(生成代码内置,均为 `Kind=where` 显式拒绝):`contains` / `prefix` / `suffix` 的空串会退化为 `ILIKE '%%'`(命中全部非 NULL 行),等同无定位条件,必须拒绝;同一列的 `is_null` 与 `not_null` 互斥(与 List 一致),两个条件 AND 恒空,不静默返回 0 行。
+
+**SET 三态进签名**:`NOT NULL` 列 `SetName(v string)`(签名无 nil 通道,误置 NULL 编译不可表达);可空列 `SetBio(v *string)`(`nil` = 显式置 NULL,字面量取指针用 `dynq.Ptr`)。未出现在选项调用中的列保持原值;无独立 SetNull 方法。切片类型(`jsonb` / `int_array`)的 `nil` 在 Go 中可表达,`NOT NULL` 列的 Set 方法在运行期显式拒绝(`Kind=set`),与"非空列无 nil 通道"承诺一致。
+
+**与 `@pk` 的关系**:
+
+- 有 `@pk` 时,主键列的完整类型矩阵(不含 null op)自动生成 Where 定位方法,无需在主键上声明 `@updatable`;
+- 主键列**永不生成 Set**:set-capable 形态落 pk → 生成期 fail(主键不可变);`where` / `false` 落 pk 惰性 / 幂等(不改变自动矩阵);
+- 无 `@pk` 表没有自动定位方法,定位完全依赖 where-capable `@updatable` 列(见 §3.6)。
+
+**其他规则**:
+
+- 与 `@internal` **正交**:`@internal` + `@updatable` 合法(服务端可写、协议不可见,`password` 类);Update 不读 `Hidden`,该列的 Set / Where 方法照常生成;`@internal` 仍排除读面的过滤 / 排序 / 返回能力;
+- 非 `false` 形态的类型不可映射(§4.1 词表外)→ 生成期 fail;`@updatable: false` 惰性放行;
+- 表级 `@update: false` 与非 false 形态共存 → 生成期 fail(死声明;主键列上的 `where` 惰性例外,见 §3.6);
+- set-capable 列存在但无 where-capable(且无 `@pk` 自动定位)→ 生成期 fail(更新面不可用);只有 where-capable 声明而无 set-capable → 生成期 fail(死配置;主键列上的 `where` 为惰性声明,不参与该判定);
+- `@filter` 目标列可 `@updatable`:UPDATE 的 WHERE 恒含该不变量,可用 `XxxUpdate.WithoutFilter()` 显式绕过(见 §3.6);
+- `@scope` **不参与写面**:Update 不消费 Scope,权限由读取阶段保证(先查后改;TOCTOU 见 [scope.md](./scope.md));
+- 无任何 set-capable 列的表不生成更新面(只读表零声明即隐式退出);显式 `@update` 开启但零 set-capable 列 → 生成期 fail(死配置)。
+
+### 2.7 指令命名对照与弃用时间线
 
 `@hidden` → `@internal`、`@selectable` → `@hideable` 为纯更名(能力语义不变),更名动机:旧名与既有域词错位——"hidden" 易被读成 schema 消失 / UI 显隐,而其语义是**服务端内部列(协议面全排除)**;"selectable" 恰是 `fields` 列选择域的既有词,而其语义是**列头显隐交互的 UI 提示**。
 
@@ -388,8 +449,45 @@ COMMENT ON TABLE projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_
 - `is_null` / `not_null` 不带值;`eq` / 比较类恰带一个字面量(`'字符串'` / 整数),校验后写进生成的代码(经占位符传参,不拼进 SQL 文本);
 - 同一列至多一条子句(一条不变量一列),重复 → 生成期 fail;不做 `is_null`+`eq` 之类的组合校验(两种条件组合出的结果可能恒为空集,由使用者自行判断);
 - 与列能力矩阵解耦:目标列可 `@internal`、可无 `@dynamic`、任意 PG 类型(仅存在性校验,不做类型推导);与同列 `@dynamic` 并存合法:不变量再 AND 上客户端条件,命中行只会更少,是预期行为而非冲突;
-- 表是否生成代码与 `@filter` 无关:只声明 `@filter` 的表不会生成(入选条件仍是 `@dynamic` / `@pk` / `options.tables`,与 `@scope` 同)。但声明本身的合法性一律校验——没入选的表上写了非法 `@filter`(如 op 手误)同样生成期 fail;合法却未入选则不产生任何效果;
+- `@filter` 同时作用于读面与写面:读面由 List / Count 共用恒等过滤;写面恒定 AND 进 UPDATE 的 WHERE,并额外生成 `XxxUpdate.WithoutFilter()` 显式绕过。表是否生成代码仍与 `@filter` 声明无关——入选条件是 `@dynamic` / `@pk` / set-capable `@updatable` / `options.tables`。声明本身的合法性一律校验——没入选的表上写了非法 `@filter`(如 op 手误)同样生成期 fail;合法却未入选则不产生任何效果;
 - 带引号字面量内连续空格会被分词器折叠(与 `@scope` 字面量同一既有限制),字面量应避免连续空格。
+
+### 3.6 `@update`
+
+**语法**
+
+```
+@update
+@update: true | false | auto
+```
+
+**举例**
+
+```sql
+-- 显式退出(只读表;与零 set-capable 列等价):
+COMMENT ON TABLE audit_logs IS '审计日志 [@pk: id @update: false]';
+
+-- 显式开启(幂等;裸 @update 等价 @update: true):
+COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
+```
+
+**描述**
+
+表级动态更新面开关。只管本插件生成的 typed Update 面是否产出,**不影响** sqlc 静态查询对同一表的 `UPDATE`。
+
+- 缺省(不写指令)= `auto`:入选表只要有至少一列 set-capable `@updatable` 就生成更新面;
+- 裸 `@update` = `@update: true`;`true` / `auto` 开启,`false` 关闭;其他 payload → 生成期 fail;
+- 策略来源回显按声明原文(裸形态回显为 `@update`);
+- `@update: false` 与非 false 形态的 `@updatable` 共存 → 生成期 fail(死声明,防 DDL 漂移;主键列上的 `where` 惰性例外,见下);
+- 显式开启(`true` / `auto`)但零 set-capable 列 → 生成期 fail(死配置);
+- **无 `@pk` 表的更新面**:只生成 header + marker + Set / Where + `UpdateXxx`,不生成 registry / 参数 / 解析 / List / Count / Schema / 游标;入选要求 set-capable 与 where-capable **同时满足**。出现读侧指令(`@dynamic` / `@sortable` / `@hideable` / `@api` / `@scope` / `@default_sort` / `@page`)→ 生成期 fail(`@dynamic` 沿用 missing `@pk` 文案);
+- 无 `@pk` 表的零 where 守卫只保证"至少一个条件",条件可能命中多行——**只适合调用方自带唯一组合条件**的场景;
+- `@scope` 不参与写面:Update 不取 Scope、不平移权限谓词;权限由读取阶段保证(先查后改,TOCTOU 见 [scope.md](./scope.md));
+- `@update: false` 与 pk 上的 `@updatable: where` 并存合法:该声明对 pk 自动矩阵是惰性的(`false` 形态同样惰性),不构成死声明;
+- 更新面生成的包级符号 `<单数>Table` / `<单数>Update` / `<单数>UpdateOption` 与 sqlc 模型类型撞名时生成期 fail(同包共存,如 `user_table` 的模型 `UserTable` 会撞 `users` 的 marker);
+- `@filter` 不变量恒定 AND 进 UPDATE 的 WHERE;声明了 `@filter` 的表额外生成 `XxxUpdate.WithoutFilter()`(整表级绕过、幂等,不豁免零 where 守卫)。
+
+**已知限制**:`where` 形态不能与显式 op 组合(不支持 `where, eq` 收窄);null op 不随 `auto` / `where` 自动授予;同列重复 `@updatable` 取首条。
 
 ## 4. 类型映射与能力矩阵
 
@@ -407,11 +505,11 @@ COMMENT ON TABLE projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_
 | `uuid`                                                                                                  | `uuid`      | `string`                                 |
 | `jsonb` / `json`                                                                                        | `jsonb`     | `[]byte`                                 |
 | `int4` / `integer` 数组                                                                                   | `int_array` | `[]int64`                                |
-| 其他数组类型                                                                                                  | (不支持)       | 生成期 fail(若列声明了 `@dynamic` / `@sortable`) |
+| 其他数组类型                                                                                                  | (不支持)       | 生成期 fail(若列声明了 `@dynamic` / `@sortable` / 非 false 的 `@updatable`) |
 | 枚举类型(`CREATE TYPE ... AS ENUM`)                                                                         | `enum`      | sqlc-gen-go 枚举类型名                        |
-| 其他未知类型                                                                                                  | `unmapped`  | 不参与过滤 / 排序,只作为普通返回列                      |
+| 其他未知类型                                                                                                  | `unmapped`  | 不参与过滤 / 排序 / 写入,只作为普通返回列                   |
 
-**`unmapped`** **列**:不可映射类型且未声明 `@dynamic` / `@sortable` 的列按纯展示列放行(可写进 `fields` 被返回,但不出现在 schema 的 `ops` / `sortable` 中)。声明了过滤 / 排序能力但类型不可映射 → 生成期 fail。
+**`unmapped`** **列**:不可映射类型且未声明 `@dynamic` / `@sortable` / 非 false `@updatable` 的列按纯展示列放行(可写进 `fields` 被返回,但不出现在 schema 的 `ops` / `sortable` 中)。声明了过滤 / 排序 / 写入能力但类型不可映射 → 生成期 fail;`@updatable: false` 是惰性声明,不要求类型可映射。
 
 **`@sortable`** **的类型限制**:`numeric`(无法编码游标值)与 `int_array`(无法参数化 seek 谓词)与 `unmapped` 不可声明 `@sortable` → 生成期 fail。
 
@@ -516,8 +614,22 @@ COMMENT ON TABLE projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_
 | ------------------------------------------------------------------ | ------------------------------------------------------------- |
 | 注释 `[` 未闭合                                                         | 生成期 fail,定位到列                                                 |
 | 指令块内未知 `@xxx` 标签                                                   | 生成期 fail,定位到列与标签名                                             |
-| 弃用旧名 `@hidden` / `@selectable`                                     | **非 fail**:解析为等价新名 + 生成期 deprecation 提示(stderr,每列至多一条,见 §2.6) |
-| `@internal` 与 `@dynamic` / `@sortable` / `@hideable` / `@api` 任一组合 | 生成期 fail                                                      |
+| 弃用旧名 `@hidden` / `@selectable`                                     | **非 fail**:解析为等价新名 + 生成期 deprecation 提示(stderr,每列至多一条,见 §2.7) |
+| `@internal` 与 `@dynamic` / `@sortable` / `@hideable` / `@api` 任一组合 | 生成期 fail(`@updatable` 除外:写能力与协议可见性正交)                        |
+| `@updatable` 保留形态词与 op 项混写(如 `set, eq`)                         | 生成期 fail                                                      |
+| `@updatable` 显式 op 项既非预设也非已知 op                                   | 生成期 fail                                                      |
+| `@updatable` 显式 op 项类型不支持(如对 `enum` 声明 `gt`)                       | 生成期 fail                                                      |
+| `@updatable` 显式 op 项为 `is_null` / `not_null` 且列非空                   | 生成期 fail                                                      |
+| `@updatable` 显式清单展开后无任何 op 命中                                     | 生成期 fail                                                      |
+| `@pk` 列声明 set-capable 形态(`@updatable` / `auto` / `set` / 显式清单)      | 生成期 fail(主键不可变;`where` / `false` 惰性)                          |
+| 非 `false` 形态 `@updatable` 的列类型不可映射                                | 生成期 fail(`false` 惰性放行)                                       |
+| set-capable 而无 where-capable(且无 `@pk` 自动定位)                    | 生成期 fail(更新面不可用)                                             |
+| where-capable 声明而无 set-capable(主键列 `where` 惰性例外)              | 生成期 fail(死配置)                                                |
+| 无 `@pk` 表出现读侧指令(`@dynamic` / `@sortable` / `@hideable` / `@api` / `@scope` / `@default_sort` / `@page`) | 生成期 fail(复用 missing `@pk` 文案)                                 |
+| `@update` payload 非 `true` / `false` / `auto`(裸 `@update` 合法)       | 生成期 fail                                                      |
+| `@update: false` 与非 false 形态 `@updatable` 并存(主键列 `where` 惰性例外)   | 生成期 fail(死声明)                                                 |
+| 显式 `@update`(`true` / `auto`)开启但零 set-capable 列                  | 生成期 fail(死配置)                                                 |
+| 更新面符号 `<单数>Table` / `<单数>Update` / `<单数>UpdateOption` 与模型类型撞名 | 生成期 fail(同包符号冲突,重命名冲突表)                                       |
 | `@dynamic` 项既非预设也非已知 op                                            | 生成期 fail                                                      |
 | `@dynamic` 显式 op 项类型不支持(如对 `bool` 声明 `range`)                      | 生成期 fail                                                      |
 | `@dynamic` 显式 op 项为 `is_null` / `not_null` 且列非空                    | 生成期 fail                                                      |
@@ -526,7 +638,7 @@ COMMENT ON TABLE projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_
 | `@api` 类型非 `integer` / `uuid` / `string`                           | 生成期 fail                                                      |
 | `@api` 缺 `value_key` / `label_key` 或含未知参数或 `endpoint` 含 `?`        | 生成期 fail                                                      |
 | `@api` 与 `@internal` 组合                                            | 生成期 fail                                                      |
-| 表注释无 `@pk`                                                         | 生成期 fail                                                      |
+| 无 `@pk` 且出现读侧指令(或经 `options.tables` 点名却既无读面也无更新面)            | 生成期 fail(无 `@pk` 的纯更新面合法:set-capable + where-capable 同时满足)            |
 | `@pk` 指向不存在 / 可空 / `@internal` / 不可映射类型的列                          | 生成期 fail                                                      |
 | `@default_sort` 目标不存在 / 未 `@sortable` / `@internal` / 不可映射         | 生成期 fail                                                      |
 | `@page` 默认值 > 上限 或 任一 < 1                                          | 生成期 fail                                                      |
@@ -541,7 +653,7 @@ COMMENT ON TABLE projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_
 | `@filter` 同列重复子句                                                   | 生成期 fail                                                      |
 | `@filter` 目标列不存在或列名非 snake\_case                                   | 生成期 fail                                                      |
 | camelCase 折叠冲突(两列归一为同一逻辑键)                                         | 生成期 fail                                                      |
-| 生成范围为空(无 `@dynamic` / `@pk` 声明且未在 `options.tables` 中列出)            | 生成期 fail                                                      |
+| 生成范围为空(无 `@dynamic` / `@pk` / set-capable `@updatable` 声明且未在 `options.tables` 中列出) | 生成期 fail                                                      |
 
 ## 7. 返回列控制真值表
 
@@ -556,6 +668,8 @@ COMMENT ON TABLE projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_
 | 正向标记任意组合              | ✓        | ✓            | 有 `@hideable` 才渲染 | 有 `@dynamic` 才可 | 有 `@sortable` 才可 |
 | `@internal`           | ✗ 永不返回   | ✗            | 不出现在 schema       | ✗               | ✗                |
 | `@internal` 与任一正向标记组合 | 生成期 fail | <br />       | <br />            | <br />          | <br />           |
+
+`@updatable` 不在此表中:它只作用于 Update 写面,不改变读面的默认返回 / `fields` 可选中 / UI 列头行为。`@internal` + `@updatable` 合法——服务端可写、协议不可见(如 `password`);Update 不读 `Hidden`,`@updatable` 的 SET / WHERE 能力与 `@dynamic` 完全独立;有 `@pk` 时主键列自动获得 Where 定位矩阵,无 `@pk` 表则完全依赖 where-capable 列。
 
 ## 8. 完整示例
 
@@ -583,21 +697,21 @@ CREATE TABLE users (
 );
 
 COMMENT ON COLUMN users.id         IS 'ID [@dynamic: exact, in @sortable @hideable]';
-COMMENT ON COLUMN users.name       IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable]';
-COMMENT ON COLUMN users.email      IS '用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable]';
-COMMENT ON COLUMN users.password   IS '密码 [@internal]';
-COMMENT ON COLUMN users.status     IS '状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable]';
-COMMENT ON COLUMN users.role       IS '角色 [@dynamic: fuzzy @sortable]';
-COMMENT ON COLUMN users.age        IS '年龄 [@dynamic: exact, in, range @sortable @hideable]';
-COMMENT ON COLUMN users.score      IS '评分 [0-100] [@dynamic: range @sortable @hideable]';
-COMMENT ON COLUMN users.balance    IS '余额 [元] [@dynamic: range @hideable]';
-COMMENT ON COLUMN users.birth_date IS '生日 [@dynamic: eq, range @hideable]';
-COMMENT ON COLUMN users.org_id     IS '组织ID [@dynamic: exact, in]';
-COMMENT ON COLUMN users.tags       IS '标签 [@dynamic: in @hideable]';
-COMMENT ON COLUMN users.meta       IS '元数据 [@dynamic: has]';
+COMMENT ON COLUMN users.name       IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable @updatable]';
+COMMENT ON COLUMN users.email      IS '用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable @updatable: set]';
+COMMENT ON COLUMN users.password   IS '密码 [@internal @updatable]';
+COMMENT ON COLUMN users.status     IS '状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable @updatable]';
+COMMENT ON COLUMN users.role       IS '角色 [@dynamic: fuzzy @sortable @updatable: exact]';
+COMMENT ON COLUMN users.age        IS '年龄 [@dynamic: exact, in, range @sortable @hideable @updatable: eq, range]';
+COMMENT ON COLUMN users.score      IS '评分 [0-100] [@dynamic: range @sortable @hideable @updatable: set]';
+COMMENT ON COLUMN users.balance    IS '余额 [元] [@dynamic: range @hideable @updatable: set]';
+COMMENT ON COLUMN users.birth_date IS '生日 [@dynamic: eq, range @hideable @updatable: false]';
+COMMENT ON COLUMN users.org_id     IS '组织ID [@dynamic: exact, in @updatable: where]';
+COMMENT ON COLUMN users.tags       IS '标签 [@dynamic: in @hideable @updatable]';
+COMMENT ON COLUMN users.meta       IS '元数据 [@dynamic: has @updatable: set]';
 COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range @sortable @hideable]';
-COMMENT ON COLUMN users.updated_at IS '更新时间 [@dynamic: range, is_null, not_null @sortable]';
-COMMENT ON COLUMN users.deleted_at IS '删除时间 [@dynamic: is_null, not_null]';
+COMMENT ON COLUMN users.updated_at IS '更新时间 [@dynamic: range, is_null, not_null @sortable @updatable: eq, is_null]';
+COMMENT ON COLUMN users.deleted_at IS '删除时间 [@dynamic: is_null, not_null @updatable: set]';
 COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null]';
 
 -- @api 引用字段选项数据源
@@ -610,7 +724,9 @@ CREATE TABLE orders (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-COMMENT ON COLUMN orders.user_id IS '用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name]';
+COMMENT ON COLUMN orders.user_id IS '用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name @updatable: where]';
+COMMENT ON COLUMN orders.status IS '状态 [@dynamic: exact, in @sortable @hideable @updatable: eq, neq]';
+COMMENT ON COLUMN orders.amount_cents IS '金额（分） [@dynamic: range @sortable @hideable @updatable: range]';
 COMMENT ON TABLE  orders          IS '订单表 [@default_sort: created_at DESC @pk: id @page: 20/100]';
 
 -- @scope 三守卫 OR:归属用户集合 / 归属部门集合 / 显式共享字面量参数
@@ -625,10 +741,11 @@ CREATE TABLE customers (
 );
 
 COMMENT ON COLUMN customers.id   IS 'ID [@dynamic: exact @sortable @hideable]';
-COMMENT ON COLUMN customers.name IS '客户名 [@dynamic: fuzzy @sortable @hideable]';
+COMMENT ON COLUMN customers.name IS '客户名 [@dynamic: fuzzy @sortable @hideable @updatable: set]';
+COMMENT ON COLUMN customers.amount_cents IS '金额（分） [@dynamic: range @sortable @hideable @updatable: set]';
 COMMENT ON COLUMN customers.owner_user_id IS '归属用户ID [@internal]';
 COMMENT ON COLUMN customers.owner_dept_id IS '归属部门ID [@internal]';
-COMMENT ON TABLE  customers IS '客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted(''customers'', user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]';
+COMMENT ON TABLE  customers IS '客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted(''customers'', user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @update: true]';
 
 -- @scope eq 标量守卫:租户隔离(tenant_id = fn_tenant_id(user_id))
 CREATE TABLE projects (
@@ -639,6 +756,7 @@ CREATE TABLE projects (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+COMMENT ON COLUMN projects.name IS '项目名 [@dynamic: fuzzy @sortable @hideable @updatable]';
 COMMENT ON COLUMN projects.tenant_id IS '租户ID [@internal]';
 COMMENT ON TABLE  projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @filter: name eq ''template'']';
 
@@ -652,8 +770,22 @@ CREATE TABLE sys_user (
 );
 
 COMMENT ON COLUMN sys_user.id   IS 'ID [@dynamic: exact]';
-COMMENT ON COLUMN sys_user.name IS '姓名 [@dynamic: fuzzy]';
+COMMENT ON COLUMN sys_user.name IS '姓名 [@dynamic: fuzzy @updatable]';
 COMMENT ON TABLE sys_user IS '员工表 [@scope: id in_any fn_perm_user_ids(user_id:varchar, scopes:int[]) @pk: id]';
+
+-- 无 @pk 表:只生成更新面(键列 where-capable 复合定位、note set-capable)
+CREATE TABLE sys_resource_grant (
+    resource  varchar(64) NOT NULL,
+    user_id   varchar(64) NOT NULL,
+    record_id bigint      NOT NULL,
+    note      TEXT,
+    PRIMARY KEY (resource, user_id, record_id)
+);
+
+COMMENT ON COLUMN sys_resource_grant.resource  IS '资源 [@updatable: where]';
+COMMENT ON COLUMN sys_resource_grant.user_id   IS '用户ID [@updatable: where]';
+COMMENT ON COLUMN sys_resource_grant.record_id IS '记录ID [@updatable: where]';
+COMMENT ON COLUMN sys_resource_grant.note      IS '备注 [@updatable: set]';
 
 -- @pk 最小接入形态:零 @dynamic 列(仅 List/Count/分页骨架)
 CREATE TABLE audit_logs (
@@ -663,7 +795,7 @@ CREATE TABLE audit_logs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-COMMENT ON TABLE audit_logs IS '审计日志 [@pk: id]';
+COMMENT ON TABLE audit_logs IS '审计日志 [@pk: id @update: false]';
 ```
 
 守卫函数实现(`fn_accessible_user_ids` / `fn_tenant_id` / `fn_perm_user_ids` 等)见 [example/db/schema.sql](./example/db/schema.sql)。

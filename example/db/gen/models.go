@@ -110,13 +110,13 @@ type AuditLog struct {
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 }
 
-// 客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted('customers', user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100]
+// 客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted('customers', user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @update: true]
 type Customer struct {
 	// ID [@dynamic: exact @sortable @hideable]
 	ID int64 `db:"id" json:"id"`
-	// 客户名 [@dynamic: fuzzy @sortable @hideable]
+	// 客户名 [@dynamic: fuzzy @sortable @hideable @updatable]
 	Name string `db:"name" json:"name"`
-	// 金额（分） [@dynamic: range @sortable @hideable]
+	// 金额（分） [@dynamic: range @sortable @hideable @updatable: set]
 	AmountCents int64 `db:"amount_cents" json:"amount_cents"`
 	// 归属用户ID [@internal]
 	OwnerUserID string `db:"owner_user_id" json:"owner_user_id"`
@@ -131,13 +131,13 @@ type Customer struct {
 // 订单表 [@default_sort: created_at DESC @pk: id @page: 20/100 @filter: amount_cents gte 0]
 type Order struct {
 	ID int64 `db:"id" json:"id"`
-	// 订单号 [@dynamic: exact, prefix @hideable]
+	// 订单号 [@dynamic: exact, prefix @hideable @updatable: set]
 	OrderNo string `db:"order_no" json:"order_no"`
-	// 用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name]
+	// 用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name @updatable: where]
 	UserID int64 `db:"user_id" json:"user_id"`
-	// 金额（分） [@dynamic: range @sortable @hideable]
+	// 金额（分） [@dynamic: range @sortable @hideable @updatable: range]
 	AmountCents int64 `db:"amount_cents" json:"amount_cents"`
-	// 状态 [@dynamic: exact, in @sortable @hideable]
+	// 状态 [@dynamic: exact, in @sortable @hideable @updatable: eq, neq]
 	Status OrderStatus `db:"status" json:"status"`
 	// 创建时间 [@dynamic: range @sortable @hideable]
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
@@ -147,7 +147,7 @@ type Order struct {
 type Project struct {
 	// ID [@dynamic: exact @sortable @hideable]
 	ID int64 `db:"id" json:"id"`
-	// 项目名 [@dynamic: fuzzy @sortable @hideable]
+	// 项目名 [@dynamic: fuzzy @sortable @hideable @updatable]
 	Name string `db:"name" json:"name"`
 	// 租户ID [@internal]
 	TenantID string `db:"tenant_id" json:"tenant_id"`
@@ -163,16 +163,21 @@ type SysDeptClosure struct {
 }
 
 type SysResourceGrant struct {
+	// 资源 [@updatable: where]
 	Resource string `db:"resource" json:"resource"`
-	UserID   string `db:"user_id" json:"user_id"`
-	RecordID int64  `db:"record_id" json:"record_id"`
+	// 用户ID [@updatable: where]
+	UserID string `db:"user_id" json:"user_id"`
+	// 记录ID [@updatable: where]
+	RecordID int64 `db:"record_id" json:"record_id"`
+	// 备注 [@updatable: set]
+	Note *string `db:"note" json:"note"`
 }
 
 // 员工表 [@scope: id in_any fn_perm_user_ids(user_id:varchar, scopes:int[]) @pk: id]
 type SysUser struct {
 	// ID [@dynamic: exact]
 	ID string `db:"id" json:"id"`
-	// 姓名 [@dynamic: fuzzy]
+	// 姓名 [@dynamic: fuzzy @updatable]
 	Name        string             `db:"name" json:"name"`
 	OwnerDeptID string             `db:"owner_dept_id" json:"owner_dept_id"`
 	TenantID    string             `db:"tenant_id" json:"tenant_id"`
@@ -183,34 +188,34 @@ type SysUser struct {
 type User struct {
 	// ID [@dynamic: exact, in @sortable @hideable]
 	ID int64 `db:"id" json:"id"`
-	// 姓名 [@dynamic: fuzzy, exact @sortable @hideable]
+	// 姓名 [@dynamic: fuzzy, exact @sortable @hideable @updatable]
 	Name string `db:"name" json:"name"`
-	// 用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable]
+	// 用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable @updatable: set]
 	Email string `db:"email" json:"email"`
-	// 密码 [@internal]
+	// 密码 [@internal @updatable]
 	Password string `db:"password" json:"password"`
-	// 状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable]
+	// 状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable @updatable]
 	Status UserStatus `db:"status" json:"status"`
-	// 角色 [@dynamic: fuzzy @sortable]
+	// 角色 [@dynamic: fuzzy @sortable @updatable: exact]
 	Role *string `db:"role" json:"role"`
-	// 年龄 [@dynamic: exact, in, range @sortable @hideable]
+	// 年龄 [@dynamic: exact, in, range @sortable @hideable @updatable: eq, range]
 	Age *int32 `db:"age" json:"age"`
-	// 评分 [0-100] [@dynamic: range @sortable @hideable]
+	// 评分 [0-100] [@dynamic: range @sortable @hideable @updatable: set]
 	Score *float64 `db:"score" json:"score"`
-	// 余额 [元] [@dynamic: range @hideable]
+	// 余额 [元] [@dynamic: range @hideable @updatable: set]
 	Balance pgtype.Numeric `db:"balance" json:"balance"`
-	// 生日 [@dynamic: eq, range @hideable]
+	// 生日 [@dynamic: eq, range @hideable @updatable: false]
 	BirthDate pgtype.Date `db:"birth_date" json:"birth_date"`
-	// 组织ID [@dynamic: exact, in]
+	// 组织ID [@dynamic: exact, in @updatable: where]
 	OrgID pgtype.UUID `db:"org_id" json:"org_id"`
-	// 标签 [@dynamic: in @hideable]
+	// 标签 [@dynamic: in @hideable @updatable]
 	Tags []int32 `db:"tags" json:"tags"`
-	// 元数据 [@dynamic: has]
+	// 元数据 [@dynamic: has @updatable: set]
 	Meta []byte `db:"meta" json:"meta"`
 	// 创建时间 [@dynamic: exact, in, range @sortable @hideable]
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	// 更新时间 [@dynamic: range, is_null, not_null @sortable]
+	// 更新时间 [@dynamic: range, is_null, not_null @sortable @updatable: eq, is_null]
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	// 删除时间 [@dynamic: is_null, not_null]
+	// 删除时间 [@dynamic: is_null, not_null @updatable: set]
 	DeletedAt pgtype.Timestamptz `db:"deleted_at" json:"deleted_at"`
 }

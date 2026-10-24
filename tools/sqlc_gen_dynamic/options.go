@@ -17,7 +17,7 @@ type Options struct {
 	ModelPackage string `json:"model_package"`
 	// Schema 目标 schema,默认 public。
 	Schema string `json:"schema"`
-	// Tables 生成范围;缺省为该 schema 下所有含 @dynamic 声明的表。
+	// Tables 生成范围;缺省为该 schema 下所有含 @dynamic / @pk / set-capable @updatable 声明的表。
 	Tables []string `json:"tables"`
 	// DefaultOps 未标注列的策略:none | exact | in | range | fuzzy | has。
 	// 默认 none(显式声明才生成,防 Params 字段爆炸)。

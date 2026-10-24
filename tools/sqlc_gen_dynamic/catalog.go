@@ -23,6 +23,17 @@ type ColumnSpec struct {
 	Sortable   bool
 	Selectable bool
 	Hidden     bool
+	// UpdatableMode 是列级 @updatable 的声明形态:
+	// ""(未声明) / "auto" / "set" / "where" / "false" / "list"(显式清单)。
+	UpdatableMode string
+	// SetCapable / WhereCapable 是 @updatable 的两个能力面:SET 白名单与
+	// WHERE 定位方法族。两者独立,可只开一侧(auto 除外)。
+	SetCapable   bool
+	WhereCapable bool
+	// UpdateOps 是 Where 方法族的能力清单:auto / where 取类型矩阵,
+	// list 取显式清单(预设先与类型矩阵取交集),set / false 为空。
+	// 与 @dynamic 的 Ops(读面)完全独立。
+	UpdateOps  []string
 	EnumVals   []string
 	EnumGoType string // 同包模型枚举类型名(如 UserStatus);跨包时已含前缀
 	// EnumPhysical 是 PG 枚举类型名(如 user_status),用于占位符显式 cast。
@@ -49,6 +60,17 @@ type TableSpec struct {
 	Scope           []scopeGuard      // @scope 守卫声明;空 = 未声明
 	ScopeParams     []scopeParam      // 守卫标识符参数的并集(声明序),驱动 Scope 结构体
 	Filters         []filterDirective // @filter 服务端固定条件;空 = 未声明
+	// UpdateEnabled 报告本表是否生成动态更新面:至少一列 set-capable 且未被
+	// 表级 @update: false 关闭。
+	UpdateEnabled bool
+	// ReadEnabled 报告本表是否生成读面(= 声明了 @pk)。无 @pk 表只生成
+	// 更新面(header + marker + Set / Where + UpdateXxx)。
+	ReadEnabled bool
+	// ReadDeclared 报告是否出现读侧指令(无 @pk 表据此生成期 fail)。
+	ReadDeclared bool
+	// Updatables 是 set-capable 列(声明序),驱动 Set 方法族;
+	// WHERE 方法族另按 WhereCapable / @pk 自动定位生成。
+	Updatables []*ColumnSpec
 }
 
 // scopeParam 是 Scope 结构体的一个字段来源:DSL 参数名 + Go 类型。
@@ -96,7 +118,7 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, []st
 		for _, want := range opts.Tables {
 			spec, ok := byName[want]
 			if !ok {
-				return nil, nil, fmt.Errorf("table %q listed in options not found in schema %q (or it has no dynamic declarations and no @pk)", want, opts.Schema)
+				return nil, nil, fmt.Errorf("table %q listed in options not found in schema %q (or it has no @dynamic / @pk / set-capable @updatable declarations)", want, opts.Schema)
 			}
 			picked = append(picked, spec)
 		}
@@ -108,8 +130,25 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, []st
 			return nil, nil, err
 		}
 	}
+	// 更新面生成三个包级符号(<单数>Table / <单数>Update / <单数>UpdateOption):
+	// 与 sqlc-gen-go 同包时不得与任何表的模型类型撞名(如 user_table 的模型
+	// UserTable 会撞 users 的 marker)。撞名将导致生成物不可编译,生成期即 fail。
+	modelNames := make(map[string]bool, len(schema.Tables))
+	for _, t := range schema.Tables {
+		modelNames[modelName(t.Rel.Name)] = true
+	}
+	for _, spec := range order {
+		if !spec.UpdateEnabled {
+			continue
+		}
+		for _, sym := range []string{spec.Singular + "Table", spec.Singular + "Update", spec.Singular + "UpdateOption"} {
+			if modelNames[sym] {
+				return nil, nil, fmt.Errorf("table %s: generated update symbol %q collides with an sqlc model type of the same name (rename the colliding table)", spec.Name, sym)
+			}
+		}
+	}
 	if len(order) == 0 {
-		return nil, nil, fmt.Errorf("no tables selected for dynamic generation in schema %q (opt a table in via table comment [@pk: <col>], any column [@dynamic: ...], or options.tables)", opts.Schema)
+		return nil, nil, fmt.Errorf("no tables selected for dynamic generation in schema %q (opt a table in via table comment [@pk: <col>], any column [@dynamic: ...], any column [@updatable] with set capability, or options.tables)", opts.Schema)
 	}
 	return order, deprecations, nil
 }
@@ -134,7 +173,7 @@ func enumMap(schema *pb.Schema) map[string][]string {
 	return m
 }
 
-// buildTable 解析单表;included=false 表示该表无动态声明且未被点名。
+// buildTable 解析单表;included=false 表示该表无读/写面声明且未被点名。
 // 第三返回值是本表的 deprecation 提示(旧指令名使用)。
 func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[string][]string) (*TableSpec, bool, []string, error) {
 	var deprecations []string
@@ -193,15 +232,24 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		_, sortableTag := findTag(tags, "sortable")
 		_, internalTag := findTag(tags, "internal")
 		_, hideableTag := findTag(tags, "hideable")
+		updatableTag, hasUpdatable := findTag(tags, "updatable")
 		_, hasAPI := findTag(tags, "api")
 
-		// @internal 与任一正向标记组合 → 生成期 fail。
+		// @internal 与任一正向标记组合 → 生成期 fail。@updatable 是写能力,
+		// 不属协议可见性域:@internal + @updatable 合法(服务端可写、协议不可见)。
 		if internalTag && (hasDyn || sortableTag || hideableTag || hasAPI) {
 			return nil, false, nil, fmt.Errorf("%s: @internal cannot be combined with @dynamic/@sortable/@hideable/@api", colWhere)
 		}
 		c.Hidden = internalTag
 		c.Sortable = sortableTag
 		c.Selectable = hideableTag
+		if hasUpdatable {
+			mode, err := parseUpdatableMode(colWhere, updatableTag.Payload)
+			if err != nil {
+				return nil, false, nil, err
+			}
+			c.UpdatableMode = mode
+		}
 
 		dataType, goType, err := resolveType(colWhere, col, enums, opts, &c)
 		if err != nil {
@@ -210,7 +258,7 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		c.DataType = dataType
 		c.GoType = goType
 
-		// @dynamic:显式声明或 default_ops 策略。
+		// @dynamic:显式声明或 default_ops 策略(读面;与 Update 完全独立)。
 		if hasDyn {
 			hasDynamicDecl = true
 			ops, err := expandDynamicItems(colWhere, dataType, dynTag.Payload, c.Nullable)
@@ -234,6 +282,13 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 				c.Directives = append(c.Directives, "@"+name)
 			}
 		}
+		// @updatable:写面能力(依赖 dataType,在类型解析之后展开)。
+		if hasUpdatable {
+			if err := applyUpdatable(colWhere, &c, updatableTag.Payload); err != nil {
+				return nil, false, nil, err
+			}
+			c.Directives = append(c.Directives, updatableEcho(&c))
+		}
 		// @api:选项数据源声明;仅 integer/uuid/string 引用字段支持。
 		if t, ok := findTag(tags, "api"); ok {
 			api, err := parseAPIDirective(colWhere, t)
@@ -255,6 +310,12 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		// 未标注列不参与过滤能力生成(default_ops=none),但可投影、可被点名。
 		spec.Columns = append(spec.Columns, c)
 	}
+	// SET 白名单按声明序汇总(指针指向 spec.Columns 元素,后续不再扩容)。
+	for i := range spec.Columns {
+		if spec.Columns[i].SetCapable {
+			spec.Updatables = append(spec.Updatables, &spec.Columns[i])
+		}
+	}
 
 	// 表级指令。
 	if t, ok := findTag(tableTags, "page"); ok {
@@ -273,12 +334,49 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		spec.DefaultSort = append(spec.DefaultSort, sortDirective{Column: column, Desc: desc})
 		spec.TableDirectives = append(spec.TableDirectives, fmt.Sprintf("@default_sort: %s %s", column, dirName(desc)))
 	}
+	// @pk:读面入选条件与无条件 tiebreaker。有 @pk 时 Update 的 Where 方法族
+	// 自动包含该列的完整类型矩阵(定位方法无需额外声明)。
 	if t, ok := findTag(tableTags, "pk"); ok {
 		if t.Payload == "" || strings.ContainsAny(t.Payload, " /") {
 			return nil, false, nil, fmt.Errorf("%s: @pk wants a single column name, got %q", tableWhere, t.Payload)
 		}
 		spec.Tiebreaker = camelKey(t.Payload)
+		spec.ReadEnabled = true
 		spec.TableDirectives = append(spec.TableDirectives, "@pk: "+t.Payload)
+	}
+	// @update:表级更新面开关。缺省 auto;裸 @update = true;true / auto 开启;
+	// false 关闭;其他 payload → fail。策略头回显声明原文。
+	updateDeclared, updateEnabled := false, true
+	if t, ok := findTag(tableTags, "update"); ok {
+		enabled, echo, err := parseUpdateDirective(tableWhere, t)
+		if err != nil {
+			return nil, false, nil, err
+		}
+		updateDeclared, updateEnabled = true, enabled
+		spec.TableDirectives = append(spec.TableDirectives, echo)
+	}
+	if !updateEnabled && hasEffectiveUpdatable(spec.Columns, spec.Tiebreaker) {
+		return nil, false, nil, fmt.Errorf("%s: @update: false conflicts with @updatable columns; drop one side", tableWhere)
+	}
+	if updateDeclared && updateEnabled && len(spec.Updatables) == 0 {
+		return nil, false, nil, fmt.Errorf("%s: @update declares an update surface but no column is set-capable (dead configuration)", tableWhere)
+	}
+	spec.UpdateEnabled = updateEnabled && len(spec.Updatables) > 0
+	// 能力覆盖:@pk 自动提供定位方法;无 @pk 时 set-capable 必须有显式
+	// where-capable 列,否则更新面不可用(每次都会撞零 where 守卫)。
+	hasWhereDecl := false
+	for i := range spec.Columns {
+		c := &spec.Columns[i]
+		if c.Key != spec.Tiebreaker && c.WhereCapable {
+			hasWhereDecl = true
+			break
+		}
+	}
+	if len(spec.Updatables) > 0 && !hasWhereDecl && !spec.ReadEnabled {
+		return nil, false, nil, fmt.Errorf("%s: set-capable @updatable requires at least one where-capable @updatable column (no @pk locator in this table)", tableWhere)
+	}
+	if len(spec.Updatables) == 0 && hasWhereDecl {
+		return nil, false, nil, fmt.Errorf("%s: where-capable @updatable requires at least one set-capable @updatable column", tableWhere)
 	}
 	if t, ok := findTag(tableTags, "scope"); ok {
 		guards, err := parseScopeDirective(tableWhere, t)
@@ -302,8 +400,21 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		spec.TableDirectives = append(spec.TableDirectives, "@filter: "+filterEcho(filters))
 	}
 
-	_, hasPK := findTag(tableTags, "pk")
-	included := hasDynamicDecl || hasPK
+	// 读侧指令登记:无 @pk 表只允许"无读面更新面";此处登记供 validateTable
+	// 判定(含 @pk 表不受影响)。
+	spec.ReadDeclared = hasDynamicDecl || len(spec.DefaultSort) > 0 || len(spec.Scope) > 0
+	if _, ok := findTag(tableTags, "page"); ok {
+		spec.ReadDeclared = true
+	}
+	for i := range spec.Columns {
+		c := &spec.Columns[i]
+		if c.Sortable || c.Selectable || c.API != nil {
+			spec.ReadDeclared = true
+			break
+		}
+	}
+
+	included := hasDynamicDecl || spec.ReadEnabled || len(spec.Updatables) > 0
 	if !included && len(opts.Tables) > 0 {
 		for _, want := range opts.Tables {
 			if want == table.Rel.Name {
@@ -322,6 +433,54 @@ func dirName(desc bool) string {
 	return "ASC"
 }
 
+// applyUpdatable 在类型解析之后把 @updatable 形态落成两个能力面与
+// WHERE 方法清单(auto / where 取类型矩阵,list 取显式清单)。
+func applyUpdatable(where string, c *ColumnSpec, payload string) error {
+	switch c.UpdatableMode {
+	case "false":
+		return nil // 惰性声明:不参与任何能力与判定
+	case "set":
+		c.SetCapable = true
+	case "where":
+		c.WhereCapable = true
+		c.UpdateOps = matrixOps(c.DataType)
+	case "auto":
+		c.SetCapable, c.WhereCapable = true, true
+		c.UpdateOps = matrixOps(c.DataType)
+	default: // list
+		ops, err := expandUpdatableItems(where, c.DataType, payload, c.Nullable)
+		if err != nil {
+			return err
+		}
+		c.SetCapable, c.WhereCapable = true, true
+		c.UpdateOps = ops
+	}
+	return nil
+}
+
+// hasEffectiveUpdatable 报告是否存在非 false 形态的 @updatable 声明
+// (@update: false 的死声明判定用)。pk 上的 where 形态是惰性声明
+// (生成物只由 @pk 自动矩阵决定),不构成死声明。
+func hasEffectiveUpdatable(cols []ColumnSpec, pk string) bool {
+	for i := range cols {
+		mode := cols[i].UpdatableMode
+		if mode == "" || mode == "false" {
+			continue
+		}
+		if pk != "" && cols[i].Key == pk && mode == "where" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// errMissingPK 是读面必备主键的既有文案(无 @pk 且出现读侧指令、或既无
+// 读面也无更新面时复用,保持存量报错稳定)。
+func errMissingPK(table string) error {
+	return fmt.Errorf("table %s: missing @pk directive in table comment (primary key is required for deterministic pagination)", table)
+}
+
 // resolveType 解析列的 dataType 与 Params Go 类型(含枚举识别与 override)。
 func resolveType(colWhere string, col *pb.Column, enums map[string][]string, opts *Options, c *ColumnSpec) (dataType string, goType string, err error) {
 	// 类型覆盖逃生舱优先。
@@ -334,6 +493,12 @@ func resolveType(colWhere string, col *pb.Column, enums map[string][]string, opt
 	}
 	typeName := col.Type.Name
 	if vals, isEnum := enums[typeName]; isEnum {
+		// 枚举数组在 catalog 中的 Type.Name 仍是枚举名:非 false 的 @updatable
+		// 会生成标量枚举的 Set/Where(类型不匹配,运行期必失败),生成期先拒绝。
+		// 该限制只针对写面,不扩展读侧(@dynamic / @sortable)行为。
+		if col.IsArray && c.UpdatableMode != "" && c.UpdatableMode != "false" {
+			return "", "", fmt.Errorf("%s: array type %q is not supported for @updatable", colWhere, typeName)
+		}
 		c.EnumVals = vals
 		c.EnumPhysical = typeName
 		c.EnumGoType = qualify(enumGoTypeName(typeName), opts)
@@ -344,8 +509,9 @@ func resolveType(colWhere string, col *pb.Column, enums map[string][]string, opt
 	}
 	m, err := mapPGType(col)
 	if err != nil {
-		// 类型不支持动态列:仅当列未声明任何过滤/排序能力时放行(纯投影列)。
-		if c.Hidden || c.Sortable || len(c.Ops) > 0 {
+		// 类型不支持动态列:仅当列未声明任何过滤/排序/写入能力时放行(纯投影列)。
+		// @updatable: false 是惰性声明,不要求类型可映射。
+		if c.Hidden || c.Sortable || (c.UpdatableMode != "" && c.UpdatableMode != "false") || len(c.Ops) > 0 {
 			return "", "", fmt.Errorf("%s: %v", colWhere, err)
 		}
 		return "unmapped", "", nil
@@ -391,9 +557,14 @@ func validateTable(spec *TableSpec) error {
 		seen[c.Key] = c.Physical
 	}
 
-	// @pk 必填:tiebreaker 保证全序,是确定性分页与游标定位的前提。
+	// @pk 必填:读面(tiebreaker 保证全序)必须;无 @pk 表只在"无读面更新面"
+	// 分支下合法(读侧指令或零更新能力 → 仍按原文案 fail)。
 	if spec.Tiebreaker == "" {
-		return fmt.Errorf("table %s: missing @pk directive in table comment (primary key is required for deterministic pagination)", spec.Name)
+		if spec.ReadDeclared || !spec.UpdateEnabled {
+			return errMissingPK(spec.Name)
+		}
+		// @filter 是写面合法指令,目标列存在性仍需校验。
+		return validateFilterTargets(spec)
 	}
 	pk, ok := seen[spec.Tiebreaker]
 	if !ok {
@@ -412,6 +583,9 @@ func validateTable(spec *TableSpec) error {
 		}
 		if c.DataType == "unmapped" {
 			return fmt.Errorf("table %s: @pk column %q has unsupported type for dynamic generation", spec.Name, c.Physical)
+		}
+		if c.SetCapable {
+			return fmt.Errorf("table %s: @pk column %q must not be set-capable @updatable (primary key is immutable)", spec.Name, c.Physical)
 		}
 	}
 
@@ -458,17 +632,8 @@ func validateTable(spec *TableSpec) error {
 	// 无 @dynamic、可以是任意 PG 类型(@scope 同款先验:类型契约由字面量与列
 	// 类型的 PG 兼容性保证,生成期不做类型推导)。@internal 列由生成的 registry
 	// 字段 Hidden 标记对协议不可见,纯服务端不变量列建议保持 @internal。
-	for _, f := range spec.Filters {
-		found := false
-		for _, c := range spec.Columns {
-			if c.Physical == f.Column {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("table %s: @filter column %q not found", spec.Name, f.Column)
-		}
+	if err := validateFilterTargets(spec); err != nil {
+		return err
 	}
 
 	// sortable 列的类型限制:numeric(pgtype.Numeric 无法编码游标值)与
@@ -485,6 +650,23 @@ func validateTable(spec *TableSpec) error {
 		}
 		if c.DataType == "unmapped" {
 			return fmt.Errorf("column %s.%s: @sortable requires a mappable type", spec.Name, c.Physical)
+		}
+	}
+	return nil
+}
+
+// validateFilterTargets 校验 @filter 目标列存在(读面表与无 @pk 更新面表共用)。
+func validateFilterTargets(spec *TableSpec) error {
+	for _, f := range spec.Filters {
+		found := false
+		for _, c := range spec.Columns {
+			if c.Physical == f.Column {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("table %s: @filter column %q not found", spec.Name, f.Column)
 		}
 	}
 	return nil

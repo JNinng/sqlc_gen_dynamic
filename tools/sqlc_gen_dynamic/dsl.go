@@ -12,10 +12,11 @@ import (
 // 注释 DSL(§5.2/§5.3):指令必须包裹在 [ ] 中且内容以 @ 起始;
 // 不以 @ 起始的方括号是 label 字面文本(人类注释方括号不误伤)。
 //
-// 列级:<label> [@dynamic: <项,项,...>] [@sortable] [@internal] [@hideable]
+// 列级:<label> [@dynamic: <项,项,...>] [@sortable] [@internal] [@hideable] [@updatable]
 //       (@hidden / @selectable 为弃用旧名,解析期等价归一,见 deprecatedDirectives)
 //       [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]
 // 表级:[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>]
+//       [@update[: true|false|auto]]
 //       [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...]
 //       [@filter: <列> <op> [字面量] ...]
 
@@ -149,11 +150,15 @@ func validateTagNames(where, scope string, tags []dslTag) error {
 	var allowed map[string]bool
 	if scope == "column" {
 		allowed = map[string]bool{
-			"dynamic": true, "sortable": true, "internal": true, "hideable": true, "api": true,
+			"dynamic": true, "sortable": true, "internal": true, "hideable": true,
+			"updatable": true, "api": true,
 			"hidden": true, "selectable": true, // 弃用旧名(兼容期别名)
 		}
 	} else {
-		allowed = map[string]bool{"default_sort": true, "page": true, "pk": true, "scope": true, "filter": true}
+		allowed = map[string]bool{
+			"default_sort": true, "page": true, "pk": true, "update": true,
+			"scope": true, "filter": true,
+		}
 	}
 	for _, t := range tags {
 		if !allowed[t.Name] {
@@ -213,6 +218,67 @@ func parsePageDirective(where string, t dslTag) (def, max int, err error) {
 		return 0, 0, fmt.Errorf("%s: @page default %d exceeds max %d", where, def, max)
 	}
 	return def, max, nil
+}
+
+// parseUpdateDirective 解析表级 @update 开关:
+//   - 缺省(不写指令)= auto;
+//   - 裸 @update = true;
+//   - true / auto 开启,false 关闭;其他 payload → fail。
+//
+// 第二返回值是策略来源回显原文(裸形态回显为 @update)。
+func parseUpdateDirective(where string, t dslTag) (enabled bool, echo string, err error) {
+	switch t.Payload {
+	case "":
+		return true, "@update", nil
+	case "true", "auto":
+		return true, "@update: " + t.Payload, nil
+	case "false":
+		return false, "@update: false", nil
+	default:
+		return false, "", fmt.Errorf("%s: @update wants true, false, or auto, got %q", where, t.Payload)
+	}
+}
+
+// updatableModes 是 @updatable 的保留形态词:保留字只能单独出现,
+// 与显式 op 清单混写 → 生成期 fail。
+var updatableModes = map[string]bool{"auto": true, "set": true, "where": true, "false": true}
+
+// parseUpdatableMode 解析 @updatable 的五形态:
+//   - 裸 / auto        → SET + WHERE(类型能力矩阵);
+//   - set              → 仅 SET;
+//   - where            → 仅 WHERE(类型能力矩阵);
+//   - false            → SET / WHERE 都不生成(惰性声明);
+//   - <preset|op>, ... → SET + WHERE(显式清单,auto 失效)。
+func parseUpdatableMode(where string, payload string) (string, error) {
+	switch payload {
+	case "", "auto":
+		return "auto", nil
+	case "set", "where", "false":
+		return payload, nil
+	}
+	for _, raw := range strings.Split(payload, ",") {
+		item := strings.TrimSpace(raw)
+		if item == "" {
+			return "", fmt.Errorf("%s: empty @updatable item", where)
+		}
+		if updatableModes[item] {
+			return "", fmt.Errorf("%s: @updatable reserved mode %q must appear alone (got %q)", where, item, payload)
+		}
+	}
+	return "list", nil
+}
+
+// updatableEcho 把解析后的 @updatable 形态重建为规范文本(策略来源回显):
+// auto 回显裸形态,保留形态回显声明词,显式清单回显展开后的 op 集。
+func updatableEcho(c *ColumnSpec) string {
+	switch c.UpdatableMode {
+	case "auto":
+		return "@updatable"
+	case "set", "where", "false":
+		return "@updatable: " + c.UpdatableMode
+	default:
+		return "@updatable: " + strings.Join(c.UpdateOps, ", ")
+	}
 }
 
 // APISpec 是 @api 指令的解析结果(插件侧;dynq.FieldAPI 为运行期形态)。

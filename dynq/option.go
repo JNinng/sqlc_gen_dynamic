@@ -127,6 +127,18 @@ func (s *Slots) Take(target string, index int, field FieldName) error {
 	return nil
 }
 
+// TakeSet 占用 SET 槽位;同列重复赋值返回 KindSet 的 conflicting set 错误
+// (无后写覆盖)。与 Take 共用同一冲突表形态,错误 kind 区分 SET 域。
+func (s *Slots) TakeSet(target string, index int, field FieldName) error {
+	if prev, ok := s.taken[target]; ok {
+		e := NewErr(KindSet, string(field), "conflicting set", index)
+		e.Reason = fmt.Sprintf("conflicting set (column %q already assigned by set %d)", target, prev)
+		return e
+	}
+	s.taken[target] = index
+	return nil
+}
+
 // Budget 是占位符总预算:所有 in/not_in 数组长度之和 + 条数,解析期累加校验。
 type Budget struct{ used int }
 

@@ -111,6 +111,28 @@ func ParseOptions(req *pb.GenerateRequest) (*Options, error) {
 				i, o.GoType.Import, pkg, opts.ModelImport, opts.ModelPackage)
 		}
 	}
+	// override 之间的别名一致性前置校验:同一 import 路径在产物中只 import
+	// 一次,两条声明给出不同别名时,按路径收集的 import 与其中一列的类型
+	// 前缀失配(后者静默覆盖前者),错误落在产物编译期;在此显式拒绝。
+	pkgByPath := map[string]string{}
+	for i := range opts.GoTypeOverrides {
+		o := &opts.GoTypeOverrides[i]
+		if o.GoType.Import == "" {
+			continue
+		}
+		pkg := o.GoType.Package
+		if pkg == "" {
+			pkg = o.GoType.Import[strings.LastIndexByte(o.GoType.Import, '/')+1:]
+		}
+		if prev, ok := pkgByPath[o.GoType.Import]; ok {
+			if prev != pkg {
+				return nil, fmt.Errorf("go_type_overrides[%d]: import %q is declared with conflicting aliases %q and %q; one import path must map to one alias in the generated package",
+					i, o.GoType.Import, prev, pkg)
+			}
+			continue
+		}
+		pkgByPath[o.GoType.Import] = pkg
+	}
 	return opts, nil
 }
 

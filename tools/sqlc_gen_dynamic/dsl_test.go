@@ -1009,6 +1009,151 @@ func TestOverrideModelImportPackageConflict(t *testing.T) {
 	})
 }
 
+// TestGoTypeOverrideAliasConflict 覆盖 override 之间的 import / 别名冲突
+// 前置校验(与 model_import 同族故障:不拦截则错误落在产物编译期):
+//   - 声明级(ParseOptions):同一 import 路径声明不同别名 → fail(按路径
+//     收集的映射会让其中一列的类型前缀静默悬空);
+//   - 发射级(importsSection):同一生成文件内,两个不同路径抢同一别名、
+//     或别名撞上该文件的固定 import(sq / dynq / pgx / time / json /
+//     context / models)→ fail;别名落在不同表的文件中则各自合法
+//     (Go import 别名是文件作用域)。
+func TestGoTypeOverrideAliasConflict(t *testing.T) {
+	newReq := func(t *testing.T, overrides string) *pb.GenerateRequest {
+		t.Helper()
+		req := loadGoldenRequest(t)
+		req.PluginOptions = []byte(fmt.Sprintf(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [%s]
+		}`, overrides))
+		return req
+	}
+
+	t.Run("same_import_path_conflicting_aliases_rejected", func(t *testing.T) {
+		// 同一路径两条声明:显式 package "cash" 与缺省派生 "money" 失配。
+		req := newReq(t, `
+			{"column": "users.balance", "go_type": {"import": "example.com/money", "package": "cash", "type_name": "Money"}},
+			{"column": "users.score", "go_type": {"import": "example.com/money", "type_name": "Money"}}
+		`)
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), `conflicting aliases "cash" and "money"`) {
+			t.Fatalf("want conflicting-aliases error, got: %v", err)
+		}
+	})
+
+	t.Run("same_import_path_consistent_aliases_accepted", func(t *testing.T) {
+		req := loadGoldenRequest(t)
+		setComment(req, "users", "balance", "[@updatable: set]")
+		setComment(req, "users", "score", "[@updatable: set]")
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.balance", "go_type": {"import": "github.com/shopspring/decimal", "package": "decimal", "type_name": "Decimal"}},
+				{"column": "users.score", "go_type": {"import": "github.com/shopspring/decimal", "type_name": "Decimal"}}
+			]
+		}`)
+		resp, err := Generate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		users := mustFile(t, resp, "users_dynamic_gen.go")
+		if got := strings.Count(users, `decimal "github.com/shopspring/decimal"`); got != 1 {
+			t.Errorf("consistent aliases must emit the import exactly once, got %d", got)
+		}
+		for _, want := range []string{"decimal.Decimal", "SetBalance", "SetScore"} {
+			if !strings.Contains(users, want) {
+				t.Errorf("generated surface missing %q", want)
+			}
+		}
+	})
+
+	t.Run("distinct_paths_shared_alias_same_file_rejected", func(t *testing.T) {
+		req := newReq(t, `
+			{"column": "users.balance", "go_type": {"import": "example.com/a", "package": "x", "type_name": "Decimal"}},
+			{"column": "users.org_id", "go_type": {"import": "example.com/b", "package": "x", "type_name": "UUID"}}
+		`)
+		setComment(req, "users", "balance", "[@updatable: set]")
+		setComment(req, "users", "org_id", "[@updatable: set]")
+		_, err := Generate(context.Background(), req)
+		if err == nil {
+			t.Fatal("want shared-alias collision error, got nil")
+		}
+		for _, want := range []string{
+			`alias "x" maps to import "example.com/b"`,
+			`already bound to "example.com/a" (column balance)`,
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error missing %q: %v", want, err)
+			}
+		}
+	})
+
+	t.Run("distinct_paths_shared_alias_across_files_accepted", func(t *testing.T) {
+		// 同一别名落在不同表的生成文件中:import 别名是文件作用域,各自合法。
+		req := newReq(t, `
+			{"column": "users.balance", "go_type": {"import": "example.com/a", "package": "shared", "type_name": "Decimal"}},
+			{"column": "orders.amount_cents", "go_type": {"import": "example.com/b", "package": "shared", "type_name": "Cents"}}
+		`)
+		setComment(req, "users", "balance", "[@updatable: set]")
+		setComment(req, "orders", "amount_cents", "[@updatable: set]")
+		resp, err := Generate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		users := mustFile(t, resp, "users_dynamic_gen.go")
+		orders := mustFile(t, resp, "orders_dynamic_gen.go")
+		if !strings.Contains(users, `shared "example.com/a"`) || strings.Contains(users, "example.com/b") {
+			t.Error("users file must bind the alias to example.com/a only")
+		}
+		if !strings.Contains(orders, `shared "example.com/b"`) || strings.Contains(orders, "example.com/a") {
+			t.Error("orders file must bind the alias to example.com/b only")
+		}
+	})
+
+	t.Run("override_alias_fixed_import_collision_rejected", func(t *testing.T) {
+		req := newReq(t, `
+			{"column": "users.balance", "go_type": {"import": "example.com/sqlq", "package": "sq", "type_name": "Builder"}}
+		`)
+		setComment(req, "users", "balance", "[@updatable: set]")
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), `alias "sq" collides with the generated import "github.com/Masterminds/squirrel"`) {
+			t.Fatalf("want fixed-import collision error, got: %v", err)
+		}
+	})
+
+	t.Run("override_alias_pgx_rejected_in_read_enabled_file", func(t *testing.T) {
+		// users 有 @pk(读面启用):文件固定 import pgx,别名 pgx 被占用。
+		req := newReq(t, `
+			{"column": "users.balance", "go_type": {"import": "example.com/pgxshim", "package": "pgx", "type_name": "Conn"}}
+		`)
+		setComment(req, "users", "balance", "[@updatable: set]")
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), `alias "pgx" collides with the generated import "github.com/jackc/pgx/v5"`) {
+			t.Fatalf("want pgx collision error, got: %v", err)
+		}
+	})
+
+	t.Run("override_alias_pgx_accepted_in_update_only_file", func(t *testing.T) {
+		// sys_resource_grant 无 @pk(纯更新面):文件不 import pgx,别名 pgx
+		// 在该文件合法——锁定碰撞判定的文件作用域,不做全局超集拒绝。
+		req := newReq(t, `
+			{"column": "sys_resource_grant.note", "go_type": {"import": "example.com/pgxshim", "package": "pgx", "type_name": "Conn"}}
+		`)
+		resp, err := Generate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		grant := mustFile(t, resp, "sys_resource_grant_dynamic_gen.go")
+		if !strings.Contains(grant, `pgx "example.com/pgxshim"`) {
+			t.Error("update-only file must keep the pgx alias override")
+		}
+		if strings.Contains(grant, `"github.com/jackc/pgx/v5"`) {
+			t.Error("update-only file must not import pgx")
+		}
+	})
+}
+
 // TestGoTypeOverrideDbTypeForm 覆盖 db_type 形态的 override:按 PG 类型名
 // 命中全部表的同型列(与 column 形态的 table.column 精确限定相反,跨表是
 // db_type 的设计语义)。

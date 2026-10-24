@@ -117,6 +117,12 @@ func ErrEmptyPattern(field FieldName) *Error {
 	return NewErr(KindWhere, string(field), "empty pattern: contains/prefix/suffix must not be empty", -1)
 }
 
+// ErrEmptyJSON 构造空 jsonb 定位值错误:空切片会生成 @> ''::jsonb,由 PG 在
+// 运行期报语法错误而非空结果——与空串模糊定位守卫同层,必须显式拒绝。
+func ErrEmptyJSON(field FieldName) *Error {
+	return NewErr(KindWhere, string(field), "empty json: has must carry a non-empty JSON document", -1)
+}
+
 // ErrNilSet 构造 NOT NULL 切片列(nil 会编码为 NULL)的赋值错误:签名只有
 // T 没有 *T,nil 通道必须运行期拒绝,与"非空列无 nil 通道"承诺一致。
 func ErrNilSet(field FieldName) *Error {

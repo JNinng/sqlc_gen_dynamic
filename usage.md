@@ -95,8 +95,8 @@ sql:
 | `model_import` / `model_package` | 块 1 产物位置(跨包引用其模型类型与 DBTX 时必填,见下节) |
 | `schema` | 目标 schema,默认 `public` |
 | `tables` | 生成范围;缺省为该 schema 下所有含 `@dynamic` / `@pk` / set-capable `@updatable` 声明的表 |
-| `default_ops` | 未标注列的策略,默认 `none`(显式声明才生成,防 Params 字段爆炸) |
-| `go_type_overrides` | 逃生舱,镜像 sqlc-gen-go 的类型覆盖 |
+| `default_ops` | 未标注列的策略,默认 `none`(显式声明才生成,防 Params 字段爆炸);只作用于含 `@pk` 的读面,无 `@pk` 的入选表 + 非 `none` → 生成期 fail |
+| `go_type_overrides` | 逃生舱,镜像 sqlc-gen-go 的类型覆盖;带 `import` 的覆盖会把外部包收进产物 import(`package` 缺省取路径末段) |
 | `runtime_import` | dynq 运行时包导入路径 |
 | `page_default` / `page_max` | 分页全局默认(表注释 `@page` 可覆盖),默认 20/200 |
 

@@ -1279,6 +1279,9 @@ func validateUsersParams(params ListUsersParams, cfg *dynq.QueryConfig) error {
 	if params.DeletedAtIsNull && params.DeletedAtNotNull {
 		return dynq.NewErr(dynq.KindWhere, "deletedAt", "is_null and not_null are mutually exclusive", -1)
 	}
+	if params.MetaHas != nil && len(params.MetaHas) == 0 {
+		return dynq.ErrEmptyJSON("meta")
+	}
 	return dynq.ValidateTypedSelectFields(params.SelectFields, cfg, usersRegistry)
 }
 
@@ -1440,7 +1443,7 @@ func buildUsersWhere(params ListUsersParams) []sq.Sqlizer {
 		conds = append(conds, sq.Expr("tags && ?::int4[]", params.TagsIn))
 	}
 	if params.MetaHas != nil {
-		conds = append(conds, sq.Expr("meta @> ?::jsonb", string(params.MetaHas)))
+		conds = append(conds, sq.Expr("(meta::jsonb) @> ?::jsonb", string(params.MetaHas)))
 	}
 	if params.CreatedAt != nil {
 		conds = append(conds, sq.Eq{"created_at": *params.CreatedAt})

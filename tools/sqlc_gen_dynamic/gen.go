@@ -163,6 +163,26 @@ func (tc *tableCode) importsSection() string {
 			needJSON = true
 		}
 	}
+	// go_type_overrides 的外部包:仅收集在生成面中实际被引用的列的声明,
+	// 未引用的 import 会让产物不可编译。引用面按"生成签名是否引用列 GoType"
+	// 判定(见 opsUseGoType):读面 Params 槽位与更新面 Set / Where 方法签名。
+	overrideImports := map[string]string{} // import 路径 → 包别名
+	for i := range spec.Columns {
+		c := &spec.Columns[i]
+		if c.OverrideImport == nil {
+			continue
+		}
+		o := c.OverrideImport.GoType
+		if o.Import == tc.opts.ModelImport {
+			continue // 与 models 同包:import 已存在,别名重复声明会撞名
+		}
+		used := (spec.ReadEnabled && opsUseGoType(c.Ops, goTypeOpRead)) ||
+			(spec.UpdateEnabled && (c.SetCapable || opsUseGoType(c.UpdateOps, goTypeOpUpdate) ||
+				(spec.ReadEnabled && c.Key == spec.Tiebreaker && opsUseGoType(matrixOps(c.DataType), goTypeOpUpdate))))
+		if used {
+			overrideImports[o.Import] = o.Package
+		}
+	}
 	var std, rest []string
 	std = append(std, `"context"`)
 	if needJSON {
@@ -177,6 +197,9 @@ func (tc *tableCode) importsSection() string {
 	}
 	if tc.opts.ModelImport != "" {
 		rest = append(rest, fmt.Sprintf("%s %q", tc.opts.ModelPackage, tc.opts.ModelImport))
+	}
+	for path, pkg := range overrideImports {
+		rest = append(rest, fmt.Sprintf("%s %q", pkg, path))
 	}
 	rest = append(rest, fmt.Sprintf("dynq %q", tc.opts.RuntimeImport))
 	sort.Strings(std)
@@ -432,6 +455,42 @@ func hasValueOp(ops []string) bool {
 		switch op {
 		case "is_null", "not_null":
 		default:
+			return true
+		}
+	}
+	return false
+}
+
+// goTypeOpRead / goTypeOpUpdate 划分各 op 的生成签名是否引用列 GoType,供
+// go_type_overrides 的 import 收集判定(未引用的 import 会让产物不可编译)。
+// 两面发射形态不同,必须分开判定:
+//   - 读面 Params 槽位:值 op / 数组 op 引用(has 字段类型即 GoType);
+//     模糊三 op 恒 string、is_null/not_null 恒 bool;
+//   - 更新面 Where 方法签名:值 op / 数组 op 引用;模糊三 op 恒 string、
+//     has 恒 []byte(has 参数须为 JSON 文档字节,不参与 override 类型)、
+//     is_null/not_null 无参。Set 方法恒引用(SetCapable 由调用方单独判定)。
+func goTypeOpRead(op string) bool {
+	switch op {
+	case "contains", "prefix", "suffix", "is_null", "not_null":
+		return false
+	default:
+		return true
+	}
+}
+
+func goTypeOpUpdate(op string) bool {
+	switch op {
+	case "eq", "neq", "gt", "gte", "lt", "lte", "between", "in", "not_in":
+		return true
+	default:
+		return false
+	}
+}
+
+// opsUseGoType 按面谓词报告 ops 是否存在引用列 GoType 的生成签名。
+func opsUseGoType(ops []string, refs func(string) bool) bool {
+	for _, op := range ops {
+		if refs(op) {
 			return true
 		}
 	}

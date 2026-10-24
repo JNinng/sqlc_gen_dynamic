@@ -109,6 +109,8 @@ COMMENT ON COLUMN users.updated_at IS '更新时间 [@dynamic: range, is_null, n
 
 **未声明** **`@dynamic`** **的列**:不参与过滤能力生成(受 sqlc.yaml 的 `default_ops` 控制;`default_ops=none` 时静默,其他值则按预设策略为未标注列授予 op,仍走类型交集规则)。
 
+**`default_ops`** **只作用于含** **`@pk`** **的读面**:无 `@pk` 的入选表不生成读面,策略授予的过滤能力会被静默丢弃——`default_ops≠none` 且入选表无 `@pk` → 生成期 fail(出路:补 `@pk`,或 `default_ops: none` 后按列显式 `@dynamic`)。
+
 ### 2.2 `@sortable`
 
 **语法**
@@ -503,15 +505,16 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | `varchar` / `character varying` / `bpchar` / `char` / `character` / `text`                              | `string`    | `string`                                 |
 | `bool` / `boolean`                                                                                      | `boolean`   | `bool`                                   |
 | `uuid`                                                                                                  | `uuid`      | `string`                                 |
-| `jsonb` / `json`                                                                                        | `jsonb`     | `[]byte`                                 |
+| `jsonb` / `json`                                                                                        | `jsonb`     | `[]byte`(两型统一;`has` 生成 `(col::jsonb) @> ?::jsonb`,json 列显式 cast 后比较,空值由生成代码的运行期守卫拒绝) |
 | `int4` / `integer` 数组                                                                                   | `int_array` | `[]int64`                                |
 | 其他数组类型                                                                                                  | (不支持)       | 生成期 fail(若列声明了 `@dynamic` / `@sortable` / 非 false 的 `@updatable`) |
 | 枚举类型(`CREATE TYPE ... AS ENUM`)                                                                         | `enum`      | sqlc-gen-go 枚举类型名                        |
+| 枚举数组                                                                                                    | (不支持)       | 生成期 fail(若列声明了 `@dynamic` / `@sortable` / 非 false 的 `@updatable` 或命中 `default_ops`);纯投影放行 |
 | 其他未知类型                                                                                                  | `unmapped`  | 不参与过滤 / 排序 / 写入,只作为普通返回列                   |
 
 **`unmapped`** **列**:不可映射类型且未声明 `@dynamic` / `@sortable` / 非 false `@updatable` 的列按纯展示列放行(可写进 `fields` 被返回,但不出现在 schema 的 `ops` / `sortable` 中)。声明了过滤 / 排序 / 写入能力但类型不可映射 → 生成期 fail;`@updatable: false` 是惰性声明,不要求类型可映射。
 
-**`@sortable`** **的类型限制**:`numeric`(无法编码游标值)与 `int_array`(无法参数化 seek 谓词)与 `unmapped` 不可声明 `@sortable` → 生成期 fail。
+**`@sortable`** **的类型限制**:`numeric`(无法编码游标值)、`int_array`(无法参数化 seek 谓词)、枚举数组(标量形态的游标取值与 seek 均不成立)与 `unmapped` 不可声明 `@sortable` → 生成期 fail。
 
 ### 4.2 能力矩阵(dataType × 默认可用 op)
 
@@ -556,7 +559,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | `in` / `not_in`                  | `IN` / `NOT IN`(展开占位符,1 ≤ len ≤ MaxIn)                                 | 除 jsonb 外全部(int\_array 列 `in` 语义为 `&&` 重叠)                   |
 | `contains` / `prefix` / `suffix` | `ILIKE '%v%'` / `'v%'` / `'%v'`(value 中 `%` `_` `\` 全量转义,通配符位置由 op 决定) | string                                                       |
 | `is_null` / `not_null`           | `IS NULL` / `IS NOT NULL`(禁止携带 value)                                  | 任意,仅可空列且显式声明                                                 |
-| `has`                            | `@>`(json 包含)                                                          | jsonb                                                        |
+| `has`                            | `(col::jsonb) @> ?::jsonb`(json 包含;左列显式 cast 使 `json` 与 `jsonb` 同形态;空值显式拒绝)                                  | jsonb                                                        |
 
 ## 5. 行级数据权限(`@scope`)
 

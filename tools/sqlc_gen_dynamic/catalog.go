@@ -39,6 +39,9 @@ type ColumnSpec struct {
 	// EnumPhysical 是 PG 枚举类型名(如 user_status),用于占位符显式 cast。
 	EnumPhysical string
 	NumericCast  bool
+	// OverrideImport 是命中的 go_type_overrides 声明(nil = 未命中或无 import),
+	// 供 importsSection 收集产物 import(空路径声明会被静默跳过,产物不可编译)。
+	OverrideImport *GoTypeOverride
 	// API 是 @api 选项数据源声明(nil = 无)。
 	API *APISpec
 	// DSL 回显(文件头策略来源)。
@@ -128,6 +131,12 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, []st
 	for _, spec := range order {
 		if err := validateTable(spec); err != nil {
 			return nil, nil, err
+		}
+		// default_ops 的读策略只作用于含 @pk 的读面:无 @pk 表不生成读面,
+		// 策略授予的过滤能力会被静默丢弃(死配置)。与"杜绝静默忽略"一致,
+		// 显式 fail;出路是补 @pk、或 default_ops: none 后按列显式 @dynamic。
+		if !spec.ReadEnabled && opts.DefaultOps != "none" {
+			return nil, nil, fmt.Errorf("table %s: default_ops %q would grant read-side ops but the table has no @pk (the default ops policy only shapes @pk read surfaces); declare @pk or set default_ops: none and opt columns in via explicit @dynamic", spec.Name, opts.DefaultOps)
 		}
 	}
 	// 更新面生成三个包级符号(<单数>Table / <单数>Update / <单数>UpdateOption):
@@ -257,6 +266,13 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		}
 		c.DataType = dataType
 		c.GoType = goType
+
+		// 枚举数组:读能力面不支持——按标量枚举展开会生成 enum[] 与 enum 的
+		// 非法比较 SQL,游标取值同样无法编译;仅纯投影放行。写面已在
+		// resolveType 的枚举分支拒绝非 false 的 @updatable。
+		if dataType == "enum" && col.IsArray && (hasDyn || c.Sortable || (!c.Hidden && opts.DefaultOps != "none")) {
+			return nil, false, nil, fmt.Errorf("%s: array type %q is not supported for @dynamic/@sortable (enum arrays are projection-only)", colWhere, col.Type.Name)
+		}
 
 		// @dynamic:显式声明或 default_ops 策略(读面;与 Update 完全独立)。
 		if hasDyn {
@@ -486,7 +502,12 @@ func resolveType(colWhere string, col *pb.Column, enums map[string][]string, opt
 	// 类型覆盖逃生舱优先。
 	if o := matchOverride(opts, col, c); o != nil {
 		if o.GoType.Import != "" {
+			// import 别名缺省取路径末段(与 sqlc-gen-go 同一约定)。
+			if o.GoType.Package == "" {
+				o.GoType.Package = o.GoType.Import[strings.LastIndexByte(o.GoType.Import, '/')+1:]
+			}
 			goType = o.GoType.Package + "." + o.GoType.TypeName
+			c.OverrideImport = o
 		} else {
 			goType = o.GoType.TypeName
 		}

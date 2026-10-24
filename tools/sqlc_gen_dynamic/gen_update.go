@@ -31,7 +31,7 @@ var updateOpSQL = map[string]string{
 	"eq": "=", "neq": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=",
 	"between": "between", "in": "IN", "not_in": "NOT IN",
 	"contains": "ILIKE 包含", "prefix": "ILIKE 前缀", "suffix": "ILIKE 后缀",
-	"is_null": "IS NULL", "not_null": "IS NOT NULL", "has": "@>",
+	"is_null": "IS NULL", "not_null": "IS NOT NULL", "has": "(col::jsonb) @>",
 }
 
 func (tc *tableCode) updateSection() string {
@@ -261,7 +261,13 @@ func updateWhereBody(c *ColumnSpec, op string) string {
 	case "not_null":
 		return fmt.Sprintf("return st.Where(%s, dynq.OpNotNull, sq.Expr(%q))", key, col+" IS NOT NULL")
 	case "has":
-		return fmt.Sprintf("return st.Where(%s, dynq.OpHas, sq.Expr(%q, string(v)))", key, col+" @> ?"+cast)
+		// 空 jsonb 定位值会生成 @> ''::jsonb,由 PG 在运行期报语法错误;与空串
+		// 模糊定位守卫同层,必须显式拒绝。左列 cast 到 jsonb:json 列没有
+		// json @> jsonb 运算符,(col::jsonb) 对 jsonb 列是 no-op,两型共用一条形态。
+		var b strings.Builder
+		fmt.Fprintf(&b, "if len(v) == 0 {\n\treturn dynq.ErrEmptyJSON(%s)\n}\n", key)
+		fmt.Fprintf(&b, "return st.Where(%s, dynq.OpHas, sq.Expr(%q, string(v)))", key, "("+col+"::jsonb) @> ?::jsonb")
+		return b.String()
 	}
 	return ""
 }

@@ -216,6 +216,15 @@ func (tc *tableCode) validateSection() string {
 			fmt.Fprintf(&b, "\t\treturn dynq.NewErr(dynq.KindWhere, %q, \"is_null and not_null are mutually exclusive\", -1)\n\t}\n", c.Key)
 		}
 	}
+	for _, c := range spec.Columns {
+		if !c.HasOp("has") {
+			continue
+		}
+		// 空 jsonb 定位值会生成 @> ''::jsonb 的运行期 PG 错误;协议门的 AsJSON
+		// 产不出空字节串,只有直接构造 Params 可达,仍显式拒绝。
+		fmt.Fprintf(&b, "\tif params.%sHas != nil && len(params.%sHas) == 0 {\n", c.GoConst, c.GoConst)
+		fmt.Fprintf(&b, "\t\treturn dynq.ErrEmptyJSON(%q)\n\t}\n", c.Key)
+	}
 	fmt.Fprintf(&b, "\treturn dynq.ValidateTypedSelectFields(params.SelectFields, cfg, %sRegistry)\n", tc.reg)
 	b.WriteString("}\n")
 	return b.String()
@@ -349,8 +358,10 @@ func (tc *tableCode) whereCaseLines(c *ColumnSpec, op string) []string {
 	case "not_null":
 		return []string{cond(fmt.Sprintf("params.%sNotNull", c.GoConst), fmt.Sprintf("sq.Expr(%q)", col+" IS NOT NULL"))}
 	case "has":
+		// 左列显式 cast 到 jsonb:json(非 jsonb)列没有 json @> jsonb 运算符,
+		// 运行期才报错;(col::jsonb) 对 jsonb 列是 no-op,两型共用一条形态。
 		return []string{cond(fmt.Sprintf("params.%sHas != nil", c.GoConst),
-			fmt.Sprintf("sq.Expr(%q, string(params.%sHas))", col+" @> ?"+cast, c.GoConst))}
+			fmt.Sprintf("sq.Expr(%q, string(params.%sHas))", "("+col+"::jsonb) @> ?::jsonb", c.GoConst))}
 	}
 	return nil
 }

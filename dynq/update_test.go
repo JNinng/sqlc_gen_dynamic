@@ -176,6 +176,9 @@ func TestUpdateMutationErrorHelpers(t *testing.T) {
 	if e := ErrNilSet("tags"); e.Kind != KindSet || e.Field != "tags" || !strings.Contains(e.Reason, "nil value") {
 		t.Fatalf("nil set error: %+v", e)
 	}
+	if e := ErrEmptyJSON("meta"); e.Kind != KindWhere || e.Field != "meta" || !strings.Contains(e.Reason, "empty json") {
+		t.Fatalf("empty json error: %+v", e)
+	}
 }
 
 func TestUpdateCheckInLen(t *testing.T) {

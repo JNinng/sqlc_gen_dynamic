@@ -68,8 +68,7 @@ func TestGeneratedCodeCompiles(t *testing.T) {
 	// 跨包 model_import(U9):全部入选表 + models 包限定引用,一并编译。
 	// override 取 set-only 列(Set 签名引用 uuid.UUID,Set 值经 any 透传):
 	// 端到端验证"SetCapable → 收集 import 且被签名引用"。带读面值 op 的
-	// override 会撞上协议门收敛类型与 override 类型的既有缺口(见 TODO),
-	// 不在本闸范围。
+	// override 由生成期分叉检测拒绝(见 TestGoTypeOverrideDivergence)。
 	t.Run("model_import", func(t *testing.T) {
 		buildGeneratedPackage(t, func(req *pb.GenerateRequest) {
 			setComment(req, "users", "name", "姓名 [@updatable: set]")

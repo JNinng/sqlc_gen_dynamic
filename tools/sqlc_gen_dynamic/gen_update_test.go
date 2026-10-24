@@ -664,6 +664,8 @@ func TestGenerateModelImport(t *testing.T) {
 // models 同包时不重复声明 import(别名撞名会让产物不可编译)。
 func TestGenerateModelImportOverrideSharedPackage(t *testing.T) {
 	req := loadGoldenRequest(t)
+	// 引用面取更新面 Set 签名(读面值 op 与收敛类型分叉会被生成期拒绝)。
+	setComment(req, "users", "org_id", "[@updatable: set]")
 	req.PluginOptions = []byte(`{
 		"package": "gen",
 		"model_import": "example/db/models",
@@ -681,7 +683,7 @@ func TestGenerateModelImportOverrideSharedPackage(t *testing.T) {
 	if got := strings.Count(users, `models "example/db/models"`); got != 1 {
 		t.Errorf("models import must appear exactly once, got %d", got)
 	}
-	if !strings.Contains(users, "*models.OrgRef") {
+	if !strings.Contains(users, "func (UserTable) SetOrgID(v *models.OrgRef) UserUpdateOption") {
 		t.Error("override referencing the models package must qualify with models.")
 	}
 }

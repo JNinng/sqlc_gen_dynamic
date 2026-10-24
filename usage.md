@@ -92,11 +92,11 @@ sql:
 | option | 说明 |
 |---|---|
 | `package` | 产物包名(必填;与块 1 产物同包时须一致) |
-| `model_import` / `model_package` | 块 1 产物位置(跨包引用其模型类型与 DBTX 时必填,见下节) |
+| `model_import` / `model_package` | 块 1 产物位置(跨包引用其模型类型与 DBTX 时必填,见下节);二者必须成对出现,单独设置 → 生成期 fail。`go_type_overrides` 与 models 同包时 import/package 需一致,不一致 → 生成期 fail |
 | `schema` | 目标 schema,默认 `public` |
 | `tables` | 生成范围;缺省为该 schema 下所有含 `@dynamic` / `@pk` / set-capable `@updatable` 声明的表 |
 | `default_ops` | 未标注列的策略,默认 `none`(显式声明才生成,防 Params 字段爆炸);只作用于含 `@pk` 的读面,无 `@pk` 的入选表 + 非 `none` → 生成期 fail |
-| `go_type_overrides` | 逃生舱,镜像 sqlc-gen-go 的类型覆盖;带 `import` 的覆盖会把外部包收进产物 import(`package` 缺省取路径末段) |
+| `go_type_overrides` | 逃生舱,镜像 sqlc-gen-go 的类型覆盖(`column` 形态按 `table.column` 精确限定,不跨表匹配同名列);带 `import` 的覆盖会把外部包收进产物 import(`package` 缺省取路径末段)。override 类型与协议门收敛类型分叉时,读面值 op(`eq`/`in`/`has` 等引用列 GoType 的槽位)与更新面 `between`(边界比较按默认类型发射:数值 `lo > hi`、时间型 `lo.After(hi)`;无 @pk 纯更新面表同样拒绝)→ 生成期 fail;更新面 Set / Where 与模糊三 op 不受限 |
 | `runtime_import` | dynq 运行时包导入路径 |
 | `page_default` / `page_max` | 分页全局默认(表注释 `@page` 可覆盖),默认 20/200 |
 

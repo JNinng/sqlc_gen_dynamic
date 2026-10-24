@@ -164,8 +164,11 @@ func (tc *tableCode) importsSection() string {
 		}
 	}
 	// go_type_overrides 的外部包:仅收集在生成面中实际被引用的列的声明,
-	// 未引用的 import 会让产物不可编译。引用面按"生成签名是否引用列 GoType"
-	// 判定(见 opsUseGoType):读面 Params 槽位与更新面 Set / Where 方法签名。
+	// 未引用的 import 会让产物不可编译。引用面只有更新面:Set 签名、Where
+	// 签名(值/数组 op)与 pk 自动定位矩阵。读面 Params 槽位虽也引用 GoType,
+	// 但带 import 的分叉 override + 读面值 op 已被 validateTable 拒绝,非
+	// 分叉组合只可能是与 models 同包的枚举同型(上方已 continue)——读面
+	// 不会成为唯一引用面,无需参与判定。
 	overrideImports := map[string]string{} // import 路径 → 包别名
 	for i := range spec.Columns {
 		c := &spec.Columns[i]
@@ -176,9 +179,8 @@ func (tc *tableCode) importsSection() string {
 		if o.Import == tc.opts.ModelImport {
 			continue // 与 models 同包:import 已存在,别名重复声明会撞名
 		}
-		used := (spec.ReadEnabled && opsUseGoType(c.Ops, goTypeOpRead)) ||
-			(spec.UpdateEnabled && (c.SetCapable || opsUseGoType(c.UpdateOps, goTypeOpUpdate) ||
-				(spec.ReadEnabled && c.Key == spec.Tiebreaker && opsUseGoType(matrixOps(c.DataType), goTypeOpUpdate))))
+		used := spec.UpdateEnabled && (c.SetCapable || opsUseGoType(c.UpdateOps, goTypeOpUpdate) ||
+			(spec.ReadEnabled && c.Key == spec.Tiebreaker && opsUseGoType(matrixOps(c.DataType), goTypeOpUpdate)))
 		if used {
 			overrideImports[o.Import] = o.Package
 		}

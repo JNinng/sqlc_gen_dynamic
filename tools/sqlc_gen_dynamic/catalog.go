@@ -18,11 +18,17 @@ type ColumnSpec struct {
 	Label      string
 	DataType   string // dynq.DataType 值;"unmapped" 表示不可过滤/排序仅可投影
 	GoType     string // Params Go 类型(已含模型包限定前缀)
-	Nullable   bool
-	Ops        []string
-	Sortable   bool
-	Selectable bool
-	Hidden     bool
+	// IsArray 是 catalog 的数组形态标记。validateTable 层不可见 catalog 的
+	// IsArray,能力面校验(如枚举数组拒绝)依赖该记录。
+	IsArray bool
+	// DefaultOpsGranted 报告 Ops 是否来自 default_ops 策略授予(非显式
+	// @dynamic):错误文案按触发器分支时使用。
+	DefaultOpsGranted bool
+	Nullable          bool
+	Ops               []string
+	Sortable          bool
+	Selectable        bool
+	Hidden            bool
 	// UpdatableMode 是列级 @updatable 的声明形态:
 	// ""(未声明) / "auto" / "set" / "where" / "false" / "list"(显式清单)。
 	UpdatableMode string
@@ -42,6 +48,10 @@ type ColumnSpec struct {
 	// OverrideImport 是命中的 go_type_overrides 声明(nil = 未命中或无 import),
 	// 供 importsSection 收集产物 import(空路径声明会被静默跳过,产物不可编译)。
 	OverrideImport *GoTypeOverride
+	// OverrideDivergent 报告 override 类型与默认映射(即协议门收敛)类型不一致:
+	// 读面值 op 的 Params 槽位与时间型 between 的边界比较会生成与 override
+	// 类型不匹配的代码,由 validateTable 生成期拒绝。
+	OverrideDivergent bool
 	// API 是 @api 选项数据源声明(nil = 无)。
 	API *APISpec
 	// DSL 回显(文件头策略来源)。
@@ -229,6 +239,7 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 			GoConst:    goName(col.Name),
 			ModelField: goName(col.Name),
 			Label:      label,
+			IsArray:    col.IsArray,
 			Nullable:   !col.NotNull,
 			GoType:     "unmapped",
 			DataType:   "unmapped",
@@ -260,21 +271,15 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 			c.UpdatableMode = mode
 		}
 
-		dataType, goType, err := resolveType(colWhere, col, enums, opts, &c)
+		dataType, goType, err := resolveType(colWhere, table.Rel.Name, col, enums, opts, &c)
 		if err != nil {
 			return nil, false, nil, err
 		}
 		c.DataType = dataType
 		c.GoType = goType
 
-		// 枚举数组:读能力面不支持——按标量枚举展开会生成 enum[] 与 enum 的
-		// 非法比较 SQL,游标取值同样无法编译;仅纯投影放行。写面已在
-		// resolveType 的枚举分支拒绝非 false 的 @updatable。
-		if dataType == "enum" && col.IsArray && (hasDyn || c.Sortable || (!c.Hidden && opts.DefaultOps != "none")) {
-			return nil, false, nil, fmt.Errorf("%s: array type %q is not supported for @dynamic/@sortable (enum arrays are projection-only)", colWhere, col.Type.Name)
-		}
-
 		// @dynamic:显式声明或 default_ops 策略(读面;与 Update 完全独立)。
+		// 枚举数组的能力面拒绝在 validateTable(G2:检查只作用于入选表)。
 		if hasDyn {
 			hasDynamicDecl = true
 			ops, err := expandDynamicItems(colWhere, dataType, dynTag.Payload, c.Nullable)
@@ -289,6 +294,7 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 				return nil, false, nil, err
 			}
 			c.Ops = ops
+			c.DefaultOpsGranted = true
 		}
 		for _, name := range []string{"sortable", "internal", "hideable"} {
 			if t, ok := findTag(tags, name); ok {
@@ -498,9 +504,14 @@ func errMissingPK(table string) error {
 }
 
 // resolveType 解析列的 dataType 与 Params Go 类型(含枚举识别与 override)。
-func resolveType(colWhere string, col *pb.Column, enums map[string][]string, opts *Options, c *ColumnSpec) (dataType string, goType string, err error) {
-	// 类型覆盖逃生舱优先。
-	if o := matchOverride(opts, col, c); o != nil {
+func resolveType(colWhere, tableName string, col *pb.Column, enums map[string][]string, opts *Options, c *ColumnSpec) (dataType string, goType string, err error) {
+	// 类型覆盖逃生舱优先。defaultGoType 记录未覆盖时的映射类型,供分叉检测:
+	// 协议门按 dataType 收敛(AsInt64/AsUUID/AsJSON...),override 类型不一致
+	// 时读面值 op 槽位的生成物不可编译。
+	var defaultGoType string
+	overrideHit := false
+	if o := matchOverride(opts, tableName, col, c); o != nil {
+		overrideHit = true
 		if o.GoType.Import != "" {
 			// import 别名缺省取路径末段(与 sqlc-gen-go 同一约定)。
 			if o.GoType.Package == "" {
@@ -523,8 +534,12 @@ func resolveType(colWhere string, col *pb.Column, enums map[string][]string, opt
 		c.EnumVals = vals
 		c.EnumPhysical = typeName
 		c.EnumGoType = qualify(enumGoTypeName(typeName), opts)
+		defaultGoType = c.EnumGoType
 		if goType == "" {
 			goType = c.EnumGoType
+		}
+		if overrideHit {
+			c.OverrideDivergent = goType != defaultGoType
 		}
 		return "enum", goType, nil
 	}
@@ -538,18 +553,24 @@ func resolveType(colWhere string, col *pb.Column, enums map[string][]string, opt
 		return "unmapped", "", nil
 	}
 	c.NumericCast = m.numericCast
+	defaultGoType = m.goType
 	if goType == "" {
 		goType = m.goType
+	}
+	if overrideHit {
+		c.OverrideDivergent = goType != defaultGoType
 	}
 	return m.dataType, goType, nil
 }
 
-func matchOverride(opts *Options, col *pb.Column, c *ColumnSpec) *GoTypeOverride {
+func matchOverride(opts *Options, tableName string, col *pb.Column, c *ColumnSpec) *GoTypeOverride {
 	for i := range opts.GoTypeOverrides {
 		o := &opts.GoTypeOverrides[i]
 		if o.Column != "" {
+			// column 形态为 table.column:表名与列名都须精确一致——仅按列名
+			// 匹配会让 override 泄漏到其他表的同名列(类型错配)。
 			parts := strings.SplitN(o.Column, ".", 2)
-			if len(parts) == 2 && parts[1] == col.Name {
+			if len(parts) == 2 && parts[0] == tableName && parts[1] == col.Name {
 				return o
 			}
 		} else if o.DbType != "" && o.DbType == col.Type.Name {
@@ -583,6 +604,11 @@ func validateTable(spec *TableSpec) error {
 	if spec.Tiebreaker == "" {
 		if spec.ReadDeclared || !spec.UpdateEnabled {
 			return errMissingPK(spec.Name)
+		}
+		// 更新面 between 的分叉检测与常规表共用:边界比较的发射不依赖读面,
+		// 无 @pk 纯更新面表正是 between 的主要使用形态(G1)。
+		if err := updateBetweenDivergenceError(spec); err != nil {
+			return err
 		}
 		// @filter 是写面合法指令,目标列存在性仍需校验。
 		return validateFilterTargets(spec)
@@ -657,6 +683,46 @@ func validateTable(spec *TableSpec) error {
 		return err
 	}
 
+	// 枚举数组:读能力面不支持——按标量枚举展开会生成 enum[] 与 enum 的非法
+	// 比较 SQL,游标取值同样无法编译;仅纯投影放行。写面已在 resolveType 的
+	// 枚举分支拒绝非 false 的 @updatable。检查置于入选表集:未入选表的列
+	// 声明与 default_ops 策略本不生效,不因此 fail(G2)。
+	for i := range spec.Columns {
+		c := &spec.Columns[i]
+		if c.DataType != "enum" || !c.IsArray {
+			continue
+		}
+		if c.Sortable {
+			return fmt.Errorf("column %s.%s: array type %q is not supported for @sortable (enum arrays are projection-only)", spec.Name, c.Physical, c.EnumPhysical)
+		}
+		if len(c.Ops) > 0 {
+			if c.DefaultOpsGranted {
+				return fmt.Errorf("column %s.%s: array type %q is not supported for dynamic filtering granted by default_ops; mark the column @internal, or set default_ops: none", spec.Name, c.Physical, c.EnumPhysical)
+			}
+			return fmt.Errorf("column %s.%s: array type %q is not supported for @dynamic (enum arrays are projection-only)", spec.Name, c.Physical, c.EnumPhysical)
+		}
+	}
+
+	// go_type_overrides 与协议门收敛类型的分叉检测:读面值 op 的 Params 槽位
+	// 按 dataType 收敛(AsInt64/AsUUID/AsJSON...),字段类型却是 override 类型,
+	// 分叉即不可编译。模糊三 op(恒 string)、is_null/not_null(恒 bool)与
+	// 更新面 Set/Where 的值透传(any)不引用收敛类型,分叉列仍可经这些面使用。
+	for i := range spec.Columns {
+		c := &spec.Columns[i]
+		if !c.OverrideDivergent {
+			continue
+		}
+		for _, op := range c.Ops {
+			if goTypeOpRead(op) {
+				return fmt.Errorf("column %s.%s: go_type_overrides type %q diverges from the %s coercion type; read-side op %q would generate uncompilable Params (drop the override, or keep only fuzzy / is_null / not_null ops)",
+					spec.Name, c.Physical, c.GoType, c.DataType, op)
+			}
+		}
+	}
+	if err := updateBetweenDivergenceError(spec); err != nil {
+		return err
+	}
+
 	// sortable 列的类型限制:numeric(pgtype.Numeric 无法编码游标值)与
 	// int_array(数组 seek 谓词无法参数化)不可排序。
 	for _, c := range spec.Columns {
@@ -688,6 +754,39 @@ func validateFilterTargets(spec *TableSpec) error {
 		}
 		if !found {
 			return fmt.Errorf("table %s: @filter column %q not found", spec.Name, f.Column)
+		}
+	}
+	return nil
+}
+
+// updateBetweenDivergenceError 拒绝分叉 override 列的更新面 between:边界比较
+// 按 dataType 发射(数值为 lo > hi,时间型为 lo.After(hi) 方法调用),override
+// 类型不保证可比较/携带 After 方法,一律不可编译;pk 自动定位矩阵同样发射。
+// 无 @pk 纯更新面表不经 validateTable 主流程(提前返回),由该分支单独调用
+// 本检测(G1:分叉故障类不因表形态而豁免)。
+func updateBetweenDivergenceError(spec *TableSpec) error {
+	if !spec.UpdateEnabled {
+		return nil
+	}
+	for i := range spec.Columns {
+		c := &spec.Columns[i]
+		if !c.OverrideDivergent {
+			continue
+		}
+		ops := c.UpdateOps
+		if spec.Tiebreaker != "" && c.Key == spec.Tiebreaker {
+			ops = matrixOps(c.DataType) // pk 自动定位矩阵按完整类型矩阵发射
+		}
+		for _, op := range ops {
+			if op != "between" {
+				continue
+			}
+			cmp := "lo > hi"
+			if c.DataType == "datetime" || c.DataType == "date" {
+				cmp = "lo.After(hi)"
+			}
+			return fmt.Errorf("column %s.%s: go_type_overrides type %q diverges from the %s coercion type; @updatable between emits %s, which does not compile for the override type (drop the override or the between op)",
+				spec.Name, c.Physical, c.GoType, c.DataType, cmp)
 		}
 	}
 	return nil

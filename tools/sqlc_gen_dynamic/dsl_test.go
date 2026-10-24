@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -93,7 +94,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "created_at", "创建时间 [@dynamic: is_null]") },
 			wantErr: "declared on NOT NULL column",
 		},
-		// ---- 枚举数组(U2):读能力面生成期拒绝,非法 SQL 不再流到运行期 ----
+		// ---- 枚举数组(U2/G2/G3):读能力面生成期拒绝,非法 SQL 不再流到运行期 ----
 		{
 			name: "enum_array_dynamic_rejected",
 			mutate: func(r *pb.GenerateRequest) {
@@ -105,7 +106,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 					Comment: "状态组 [@dynamic: in]",
 				})
 			},
-			wantErr: `array type "user_status" is not supported for @dynamic/@sortable`,
+			wantErr: `array type "user_status" is not supported for @dynamic (enum arrays are projection-only)`,
 		},
 		{
 			name: "enum_array_sortable_rejected",
@@ -118,7 +119,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 					Comment: "状态组 [@sortable]",
 				})
 			},
-			wantErr: `array type "user_status" is not supported for @dynamic/@sortable`,
+			wantErr: `array type "user_status" is not supported for @sortable (enum arrays are projection-only)`,
 		},
 		{
 			name: "enum_array_projection_only_allowed",
@@ -134,7 +135,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantSuccess: true,
 		},
 		{
-			// U2:策略驱动的拒绝分支——default_ops 命中无指令的枚举数组列同样 fail。
+			// G3:策略驱动的拒绝分支——文案点名 default_ops 触发器并给出出路。
 			name: "enum_array_default_ops_rejected",
 			mutate: func(r *pb.GenerateRequest) {
 				users := findTable(r, "users")
@@ -146,7 +147,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 				})
 				r.PluginOptions = []byte(`{"package":"gen","runtime_import":"github.com/jninng/sqlc_gen_dynamic/dynq","default_ops":"exact"}`)
 			},
-			wantErr: `array type "user_status" is not supported for @dynamic/@sortable`,
+			wantErr: `array type "user_status" is not supported for dynamic filtering granted by default_ops; mark the column @internal, or set default_ops: none`,
 		},
 		{
 			name: "default_sort_target_not_sortable",
@@ -785,9 +786,16 @@ func TestDeprecatedDirectiveAliases(t *testing.T) {
 // TestGoTypeOverrideImportCollected 覆盖 U3:带 import 的 go_type_overrides
 // 必须把外部包收集进产物 import;且仅在生成面实际引用该列 GoType 时收集——
 // 收集面过宽会让 import 悬空(未使用 import 产物不可编译)。
+// 引用面取更新面 Set / Where 签名:读面值 op 与协议门收敛类型分叉会被
+// 生成期拒绝(见 TestGoTypeOverrideDivergence),不可作为收集来源。
 func TestGoTypeOverrideImportCollected(t *testing.T) {
 	t.Run("referenced_collected", func(t *testing.T) {
 		req := loadGoldenRequest(t)
+		// 剥离读面 @dynamic,引用面由更新面签名承担:
+		// org_id 显式清单(eq)→ Set + Where 签名引用 uuid.UUID;
+		// balance set-only → Set 签名引用 decimal.Decimal。
+		setComment(req, "users", "org_id", "[@updatable: eq]")
+		setComment(req, "users", "balance", "[@updatable: set]")
 		req.PluginOptions = []byte(`{
 			"package": "gen",
 			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
@@ -804,9 +812,10 @@ func TestGoTypeOverrideImportCollected(t *testing.T) {
 		for _, want := range []string{
 			`uuid "github.com/google/uuid"`,
 			`decimal "github.com/shopspring/decimal"`,
-			"*uuid.UUID",
+			"func (UserTable) SetOrgID(v *uuid.UUID) UserUpdateOption",
+			"func (UserTable) WhereOrgIDEq(v uuid.UUID) UserUpdateOption",
 			// Package 缺省取 import 路径末段(shopspring/decimal → decimal)。
-			"*decimal.Decimal",
+			"func (UserTable) SetBalance(v *decimal.Decimal) UserUpdateOption",
 		} {
 			if !strings.Contains(users, want) {
 				t.Errorf("override import surface missing %q", want)
@@ -839,6 +848,364 @@ func TestGoTypeOverrideImportCollected(t *testing.T) {
 		// 收集面收窄不得误伤生成面:where-only has 的定位方法照常生成。
 		if !strings.Contains(users, "func (UserTable) WhereMetaHas(v []byte) UserUpdateOption") {
 			t.Error("where-only has column must keep its Where method")
+		}
+	})
+
+	t.Run("read_side_collected", func(t *testing.T) {
+		// 非分叉 override(枚举列 + models 限定同型,与默认映射一致)+ 读面值
+		// op:锁定三项——table.column 精确限定不泄漏到 orders 的同名列 status、
+		// models import 与跨包基础 import 去重恰一次、读面 Params 槽位呈
+		// []models.UserStatus 形态。(该组合的 override 与 models 同包,由
+		// 基础 import 承载,不经收集判定。)
+		req := loadGoldenRequest(t)
+		setComment(req, "users", "status", "状态 [@dynamic: exact, in]")
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"model_import": "example/db/models",
+			"model_package": "models",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.status", "go_type": {"import": "example/db/models", "package": "models", "type_name": "UserStatus"}}
+			]
+		}`)
+		resp, err := Generate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		users := mustFile(t, resp, "users_dynamic_gen.go")
+		if !strings.Contains(users, "[]models.UserStatus") {
+			t.Error("read-side Params slot must reference the override type (collected via the read disjunct)")
+		}
+		if got := strings.Count(users, `models "example/db/models"`); got != 1 {
+			t.Errorf("models import must appear exactly once, got %d", got)
+		}
+		// column 形态按 table.column 精确限定:不得泄漏到 orders 的同名列 status。
+		orders := mustFile(t, resp, "orders_dynamic_gen.go")
+		if !strings.Contains(orders, "models.OrderStatus") || strings.Contains(orders, "models.UserStatus") {
+			t.Error("override scoped to users.status must not leak onto orders.status")
+		}
+	})
+}
+
+// TestEnumArrayRejectedScope 覆盖 G2:枚举数组的能力面拒绝只作用于入选表——
+// 被 options.tables 排除的表,其列声明与 default_ops 策略本不生效,不因此 fail。
+func TestEnumArrayRejectedScope(t *testing.T) {
+	poison := func(req *pb.GenerateRequest) {
+		users := findTable(req, "users")
+		users.Columns = append(users.Columns, &pb.Column{
+			Name:    "statuses",
+			IsArray: true,
+			Type:    &pb.Identifier{Name: "user_status"},
+			Comment: "状态组",
+		})
+	}
+	assert := func(t *testing.T, resp *pb.GenerateResponse, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("enum array in an excluded table must not fail generation: %v", err)
+		}
+		if len(resp.Files) != 1 || resp.Files[0].Name != "orders_dynamic_gen.go" {
+			t.Fatalf("want only orders_dynamic_gen.go, got %v", fileNames(resp))
+		}
+	}
+
+	t.Run("explicit_dynamic_excluded", func(t *testing.T) {
+		req := loadGoldenRequest(t)
+		poison(req)
+		setComment(req, "users", "statuses", "状态组 [@dynamic: in]")
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"tables": ["orders"]
+		}`)
+		resp, err := Generate(context.Background(), req)
+		assert(t, resp, err)
+	})
+
+	t.Run("default_ops_granted_excluded", func(t *testing.T) {
+		// default_ops 授予型违规在被排除表上同样不生效。
+		req := loadGoldenRequest(t)
+		poison(req)
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"default_ops": "exact",
+			"tables": ["orders"]
+		}`)
+		resp, err := Generate(context.Background(), req)
+		assert(t, resp, err)
+	})
+}
+
+// TestOverrideModelImportPackageConflict 覆盖 G4:override 与 model_import
+// 同包但 import/package 不一致时,生成期前置拒绝(否则错误落在产物编译期)。
+func TestOverrideModelImportPackageConflict(t *testing.T) {
+	base := `{
+		"package": "gen",
+		"model_import": "example/db/models",
+		"model_package": "models",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"go_type_overrides": [%s]
+	}`
+	// model_package 与 import 路径末段不一致:缺省 package 的派生值(末段
+	// "models")同样触发冲突。
+	derivedBase := `{
+		"package": "gen",
+		"model_import": "example/db/models",
+		"model_package": "m",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"go_type_overrides": [
+			{"column": "users.org_id", "go_type": {"import": "example/db/models", "type_name": "OrgRef"}}
+		]
+	}`
+	cases := []struct {
+		name    string
+		options string
+	}{
+		{
+			// import 指向 models 包而 package 别名不一致:类型前缀与 import 别名失配。
+			name:    "import_matches_package_mismatch",
+			options: fmt.Sprintf(base, `{"column": "users.org_id", "go_type": {"import": "example/db/models", "package": "other", "type_name": "OrgRef"}}`),
+		},
+		{
+			// package 抢占 models 别名而 import 指向别处:重复别名声明,产物不可编译。
+			name:    "package_matches_import_mismatch",
+			options: fmt.Sprintf(base, `{"column": "users.org_id", "go_type": {"import": "github.com/google/uuid", "package": "models", "type_name": "UUID"}}`),
+		},
+		{
+			name:    "derived_package_mismatch",
+			options: derivedBase,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := loadGoldenRequest(t)
+			req.PluginOptions = []byte(tc.options)
+			_, err := Generate(context.Background(), req)
+			if err == nil || !strings.Contains(err.Error(), "conflicts with model_import/model_package") {
+				t.Fatalf("want model-import conflict error, got: %v", err)
+			}
+		})
+	}
+
+	t.Run("model_package_without_model_import_rejected", func(t *testing.T) {
+		// 仅设 model_package(无 model_import)是被 qualify 忽略的死配置:
+		// 模型引用不带前缀而 override 的显式 package 前缀仍会进产物,引用
+		// 悬空——生成期显式拒绝,而非静默产出不可编译的产物。
+		req := loadGoldenRequest(t)
+		setComment(req, "users", "balance", "[@updatable: set]")
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"model_package": "models",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.balance", "go_type": {"import": "github.com/shopspring/decimal", "package": "models", "type_name": "Decimal"}}
+			]
+		}`)
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), "model_package is set but model_import is empty") {
+			t.Fatalf("want dead model_package error, got: %v", err)
+		}
+	})
+}
+
+// TestGoTypeOverrideDbTypeForm 覆盖 db_type 形态的 override:按 PG 类型名
+// 命中全部表的同型列(与 column 形态的 table.column 精确限定相反,跨表是
+// db_type 的设计语义)。
+func TestGoTypeOverrideDbTypeForm(t *testing.T) {
+	req := loadGoldenRequest(t)
+	// users.name 与 projects.name 同为 text:一条 db_type 声明同时命中两张表。
+	// db_type 会命中范围内全部 text 列(users 的 email/password/role 也是),
+	// 一并收敛为 set-only 引用面避开读面分叉拒绝;生成范围收窄到两表,
+	// 其余 text 列(varchar 不同名,不入范围)不参与校验与产物。
+	setComment(req, "users", "name", "姓名 [@updatable: set]")
+	setComment(req, "users", "email", "[@updatable: set]")
+	setComment(req, "users", "password", "[@updatable: set]")
+	setComment(req, "users", "role", "[@updatable: set]")
+	setComment(req, "projects", "name", "项目名 [@updatable: set]")
+	req.PluginOptions = []byte(`{
+		"package": "gen",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"tables": ["users", "projects"],
+		"go_type_overrides": [
+			{"db_type": "text", "go_type": {"import": "example.com/x", "package": "x", "type_name": "T"}}
+		]
+	}`)
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	users := mustFile(t, resp, "users_dynamic_gen.go")
+	projects := mustFile(t, resp, "projects_dynamic_gen.go")
+	for name, src := range map[string]string{"users": users, "projects": projects} {
+		if !strings.Contains(src, `x "example.com/x"`) {
+			t.Errorf("%s: db_type override import not collected", name)
+		}
+	}
+	if !strings.Contains(users, "func (UserTable) SetName(v x.T) UserUpdateOption") {
+		t.Error("users.name must be overridden by db_type text")
+	}
+	if !strings.Contains(projects, "func (ProjectTable) SetName(v x.T) ProjectUpdateOption") {
+		t.Error("projects.name must be overridden by db_type text")
+	}
+}
+
+// TestGoTypeOverrideDivergence 覆盖 override 与协议门收敛类型的分叉拒绝:
+// 读面值 op 的 Params 槽位按 dataType 收敛、时间型 between 边界比较发射
+// lo.After(hi)(含 pk 自动矩阵),分叉类型一律生成期 fail;不引用收敛类型
+// 的面(模糊三 op)不受限。
+func TestGoTypeOverrideDivergence(t *testing.T) {
+	t.Run("read_value_op_rejected", func(t *testing.T) {
+		req := loadGoldenRequest(t)
+		// org_id 保持夹具的 @dynamic: exact, in(读面值 op),override 为 uuid.UUID。
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.org_id", "go_type": {"import": "github.com/google/uuid", "package": "uuid", "type_name": "UUID"}}
+			]
+		}`)
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), `go_type_overrides type "uuid.UUID" diverges from the uuid coercion type`) {
+			t.Fatalf("want divergence error, got: %v", err)
+		}
+	})
+
+	t.Run("read_value_op_update_side_allowed", func(t *testing.T) {
+		// 同一分叉列仅保留更新面引用(Set / Where 值透传 any):生成成功。
+		req := loadGoldenRequest(t)
+		setComment(req, "users", "org_id", "[@updatable: eq]")
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.org_id", "go_type": {"import": "github.com/google/uuid", "package": "uuid", "type_name": "UUID"}}
+			]
+		}`)
+		if _, err := Generate(context.Background(), req); err != nil {
+			t.Fatalf("update-side reference must be allowed: %v", err)
+		}
+	})
+
+	t.Run("datetime_between_update_rejected", func(t *testing.T) {
+		req := loadGoldenRequest(t)
+		setComment(req, "users", "updated_at", "更新时间 [@updatable: between]")
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.updated_at", "go_type": {"import": "example.com/x", "package": "x", "type_name": "T"}}
+			]
+		}`)
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), "emits lo.After(hi)") {
+			t.Fatalf("want between divergence error, got: %v", err)
+		}
+	})
+
+	t.Run("numeric_between_update_rejected", func(t *testing.T) {
+		// 数值型 between 发射 lo > hi:对 struct/指针型 override 同样不可编译,
+		// 与时间型一并拒绝(有序命名类型的例外场景过窄,不做白名单)。
+		req := loadGoldenRequest(t)
+		setComment(req, "users", "age", "年龄 [@updatable: between]")
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.age", "go_type": {"import": "example.com/x", "package": "x", "type_name": "T"}}
+			]
+		}`)
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), "emits lo > hi") {
+			t.Fatalf("want numeric between divergence error, got: %v", err)
+		}
+	})
+
+	t.Run("no_pk_update_only_between_rejected", func(t *testing.T) {
+		// 无 @pk 纯更新面表不经 validateTable 主流程(提前返回):between 分叉
+		// 检测须在该分支同样生效(G1,更新面正是 between 的主要形态)。
+		req := loadGoldenRequest(t)
+		users := findTable(req, "users")
+		for _, c := range users.Columns {
+			c.Comment = ""
+		}
+		setComment(req, "users", "name", "姓名 [@updatable: set]")
+		setComment(req, "users", "updated_at", "更新时间 [@updatable: between]")
+		users.Comment = "用户表"
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.updated_at", "go_type": {"import": "example.com/x", "package": "x", "type_name": "T"}}
+			]
+		}`)
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), "emits lo.After(hi)") {
+			t.Fatalf("want no-pk between divergence error, got: %v", err)
+		}
+	})
+
+	t.Run("pk_auto_matrix_between_rejected", func(t *testing.T) {
+		// 时间型主键 + 分叉 override:pk 自动定位矩阵含 between,同样发射
+		// lo.After(hi),须拒绝(pk 上 @updatable: where 为惰性声明)。
+		req := loadGoldenRequest(t)
+		users := findTable(req, "users")
+		for _, c := range users.Columns {
+			c.Comment = ""
+			if c.Name == "id" {
+				c.Type = &pb.Identifier{Name: "timestamptz"}
+				c.Comment = "ID [@updatable: where]"
+			}
+		}
+		setComment(req, "users", "name", "姓名 [@updatable: set]")
+		users.Comment = "用户表 [@pk: id]"
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.id", "go_type": {"import": "example.com/x", "package": "x", "type_name": "T"}}
+			]
+		}`)
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), "emits lo.After(hi)") {
+			t.Fatalf("want pk between divergence error, got: %v", err)
+		}
+	})
+
+	t.Run("identical_type_allowed", func(t *testing.T) {
+		// 与默认映射一致的 override(如 uuid → string)不构成分叉,照常放行。
+		req := loadGoldenRequest(t)
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.org_id", "go_type": {"type_name": "string"}}
+			]
+		}`)
+		if _, err := Generate(context.Background(), req); err != nil {
+			t.Fatalf("identical override type must be allowed: %v", err)
+		}
+	})
+
+	t.Run("fuzzy_only_read_allowed", func(t *testing.T) {
+		// 模糊三 op 的 Params 槽位恒 string,不引用列 GoType:分叉 override
+		// 可用,且外部包不被收集(零引用)。
+		req := loadGoldenRequest(t)
+		setComment(req, "users", "name", "姓名 [@dynamic: fuzzy]")
+		req.PluginOptions = []byte(`{
+			"package": "gen",
+			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+			"go_type_overrides": [
+				{"column": "users.name", "go_type": {"import": "github.com/google/civil", "package": "civil", "type_name": "Date"}}
+			]
+		}`)
+		resp, err := Generate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("fuzzy-only read with divergent override must be allowed: %v", err)
+		}
+		users := mustFile(t, resp, "users_dynamic_gen.go")
+		if strings.Contains(users, "civil") {
+			t.Error("fuzzy-only slots do not reference the override type; import must be skipped")
 		}
 	})
 }

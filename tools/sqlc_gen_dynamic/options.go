@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	pb "github.com/sqlc-dev/plugin-sdk-go/plugin"
 )
@@ -85,6 +86,30 @@ func ParseOptions(req *pb.GenerateRequest) (*Options, error) {
 	}
 	if opts.ModelImport != "" && opts.ModelPackage == "" {
 		return nil, fmt.Errorf("model_package is required when model_import is set")
+	}
+	// 反向死配置:model_package 单独设置时 qualify 会忽略它,模型引用不带
+	// 前缀,而 override 的显式 package 前缀仍会进产物——引用悬空且语义误导,
+	// 显式拒绝而非静默忽略。
+	if opts.ModelPackage != "" && opts.ModelImport == "" {
+		return nil, fmt.Errorf("model_package is set but model_import is empty; model_package only qualifies cross-package references")
+	}
+	// override 与 model_import 同包前置校验:models import 在产物中只声明
+	// 一次,import 一致而 package 不一致(或反之)会让别名与类型前缀失配,
+	// 错误落在产物编译期;在此显式拒绝。model_package 单独设置(无
+	// model_import)是被 qualify 忽略的死配置,不参与比较。
+	for i := range opts.GoTypeOverrides {
+		o := &opts.GoTypeOverrides[i]
+		if o.GoType.Import == "" || opts.ModelImport == "" {
+			continue
+		}
+		pkg := o.GoType.Package
+		if pkg == "" {
+			pkg = o.GoType.Import[strings.LastIndexByte(o.GoType.Import, '/')+1:]
+		}
+		if (o.GoType.Import == opts.ModelImport) != (pkg == opts.ModelPackage) {
+			return nil, fmt.Errorf("go_type_overrides[%d]: import/package %q/%q conflicts with model_import/model_package %q/%q (the models import is emitted once; align the package or use a distinct one)",
+				i, o.GoType.Import, pkg, opts.ModelImport, opts.ModelPackage)
+		}
 	}
 	return opts, nil
 }

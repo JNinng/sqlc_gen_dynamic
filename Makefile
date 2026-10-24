@@ -24,6 +24,8 @@ sqlc: $(PLUGIN_EXE)
 $(PLUGIN_EXE): $(PLUGIN_SRC)
 	$(GO) build -o $@ ./tools/sqlc_gen_dynamic
 
+# 编译闸 TestGeneratedCodeCompiles 依赖 go build 子进程,以 -short 运行会被
+# testing.Short 跳过而静默空转:本目标(与 CI)不得追加 -short。
 test:
 	$(GO) test ./...
 	$(GO) -C example test ./...

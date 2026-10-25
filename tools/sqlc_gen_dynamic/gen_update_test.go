@@ -99,10 +99,11 @@ func TestGenerateUpdateSurface(t *testing.T) {
 		// @internal + set:服务端可写、协议不可见(Update 与 @internal 正交)。
 		"func (UserTable) SetPassword(v string) UserUpdateOption",
 		"func (UserTable) WherePasswordEq(v string) UserUpdateOption",
-		// 类型 cast:枚举 / int[] / jsonb。
+		// 类型 cast:枚举 / int[] / jsonb / numeric。
 		`st.Set("status", "status", "::user_status", v)`,
 		`st.Set("tags", "tags", "::int4[]", v)`,
 		`st.Set("meta", "meta", "::jsonb", v)`,
+		`st.Set("balance", "balance", "::numeric", v)`,
 		// @pk 自动定位矩阵:无需 id 声明 @updatable。
 		"func (UserTable) WhereIDEq(v int64) UserUpdateOption",
 		"func (UserTable) WhereIDIn(vs ...int64) UserUpdateOption",

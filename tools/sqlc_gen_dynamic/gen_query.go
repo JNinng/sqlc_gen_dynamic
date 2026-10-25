@@ -34,6 +34,13 @@ func (c *ColumnSpec) whereCast() string {
 		return "::jsonb"
 	case "int_array":
 		return "::int4[]"
+	case "number":
+		// numeric 列:float8 参数显式收敛为 numeric,避免列被隐式转 float8
+		// 比较(索引失效、高精度 numeric 比较失真)。float4/float8 无需 cast。
+		if c.NumericCast {
+			return "::numeric"
+		}
+		return ""
 	default:
 		return ""
 	}

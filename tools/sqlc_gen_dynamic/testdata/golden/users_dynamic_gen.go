@@ -1401,16 +1401,16 @@ func buildUsersWhere(params ListUsersParams) []sq.Sqlizer {
 		conds = append(conds, sq.LtOrEq{"score": *params.ScoreLte})
 	}
 	if params.BalanceGt != nil {
-		conds = append(conds, sq.Gt{"balance": *params.BalanceGt})
+		conds = append(conds, sq.Expr("balance > ?::numeric", *params.BalanceGt))
 	}
 	if params.BalanceGte != nil {
-		conds = append(conds, sq.GtOrEq{"balance": *params.BalanceGte})
+		conds = append(conds, sq.Expr("balance >= ?::numeric", *params.BalanceGte))
 	}
 	if params.BalanceLt != nil {
-		conds = append(conds, sq.Lt{"balance": *params.BalanceLt})
+		conds = append(conds, sq.Expr("balance < ?::numeric", *params.BalanceLt))
 	}
 	if params.BalanceLte != nil {
-		conds = append(conds, sq.LtOrEq{"balance": *params.BalanceLte})
+		conds = append(conds, sq.Expr("balance <= ?::numeric", *params.BalanceLte))
 	}
 	if params.BirthDate != nil {
 		conds = append(conds, sq.Eq{"birth_date": *params.BirthDate})
@@ -1711,7 +1711,7 @@ func (UserTable) SetScore(v *float64) UserUpdateOption {
 // SetBalance 设置 balance（余额 [元]）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。
 func (UserTable) SetBalance(v *float64) UserUpdateOption {
 	return func(st *dynq.UpdateState[UserTable]) error {
-		return st.Set("balance", "balance", "", v)
+		return st.Set("balance", "balance", "::numeric", v)
 	}
 }
 

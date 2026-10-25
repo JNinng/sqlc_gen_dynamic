@@ -225,6 +225,50 @@ func TestGenerateScopeJSONBParam(t *testing.T) {
 	}
 }
 
+// TestGenerateNumericCast 覆盖 numeric 列的参数 cast:where 值条件显式
+// ?::numeric(float8 参数收敛为 numeric,列不被隐式转 float8 比较);
+// float4/float8 列(score)不 cast。夹具 balance 仅声明 range,eq/in 形态
+// 由末段 setComment 改写注释后覆盖。
+func TestGenerateNumericCast(t *testing.T) {
+	req := loadGoldenRequest(t)
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	src := mustFile(t, resp, "users_dynamic_gen.go")
+	for _, want := range []string{
+		`sq.Expr("balance >= ?::numeric", *params.BalanceGte)`,
+		`sq.Expr("balance <= ?::numeric", *params.BalanceLte)`,
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("numeric where cast missing %q", want)
+		}
+	}
+	if strings.Contains(src, `sq.GtOrEq{"balance"`) {
+		t.Error("numeric column must not emit bare float8 comparison")
+	}
+	if !strings.Contains(src, `sq.GtOrEq{"score": *params.ScoreGte}`) {
+		t.Error("float8 column must not gain a cast")
+	}
+
+	// eq / in 形态(setComment 改写 balance 注释):等值走 sq.Expr 单 cast,in 走 PlaceholdersCast。
+	req = loadGoldenRequest(t)
+	setComment(req, "users", "balance", "余额 [@dynamic: exact, in]")
+	resp, err = Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate(eq/in): %v", err)
+	}
+	src = mustFile(t, resp, "users_dynamic_gen.go")
+	for _, want := range []string{
+		`sq.Expr("balance = ?::numeric", *params.Balance)`,
+		`sq.Expr("balance IN ("+dynq.PlaceholdersCast(len(params.BalanceIn), "::numeric")+")", dynq.Anys(params.BalanceIn)...)`,
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("numeric eq/in cast missing %q", want)
+		}
+	}
+}
+
 func TestGenerateTablesFilter(t *testing.T) {
 	req := loadGoldenRequest(t)
 	req.PluginOptions = []byte(`{

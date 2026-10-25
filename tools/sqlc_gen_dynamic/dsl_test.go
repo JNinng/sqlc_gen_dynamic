@@ -207,6 +207,24 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: `has unsupported type "jsonb" for cursor encoding`,
 		},
 		{
+			// 枚举数组列的 DataType 同为 "enum",仅按 DataType 的白名单会
+			// 穿透:数组列一律不可作 tiebreaker(游标取值按标量形态发射,
+			// 对切片字段不可编译)。
+			name: "pk_enum_array_rejected",
+			mutate: func(r *pb.GenerateRequest) {
+				users := findTable(r, "users")
+				users.Columns = append(users.Columns, &pb.Column{
+					Name:    "statuses",
+					IsArray: true,
+					Type:    &pb.Identifier{Name: "user_status"},
+					NotNull: true,
+					Comment: "状态组",
+				})
+				users.Comment = "用户表 [@pk: statuses]"
+			},
+			wantErr: "must not be an array",
+		},
+		{
 			name: "camel_conflict",
 			mutate: func(r *pb.GenerateRequest) {
 				addColumn(r, "users", "created__at", "TIMESTAMPTZ", true)

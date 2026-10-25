@@ -637,6 +637,12 @@ func validateTable(spec *TableSpec) error {
 		if c.SetCapable {
 			return fmt.Errorf("table %s: @pk column %q must not be set-capable @updatable (primary key is immutable)", spec.Name, c.Physical)
 		}
+		// 数组列一律不可作 tiebreaker:枚举数组的 DataType 同为 "enum",仅按
+		// DataType 的白名单会穿透,而游标取值按标量形态发射(如 string(row.X)
+		// 对切片字段不可编译)。
+		if c.IsArray {
+			return fmt.Errorf("table %s: @pk column %q must not be an array (tiebreaker values are embedded in the pagination cursor)", spec.Name, c.Physical)
+		}
 		// tiebreaker 游标可编码白名单:tiebreaker 值嵌入分页游标,第二页起
 		// EncodeCursor 才取值,不可编码类型到运行期才暴露失败,生成期先行
 		// fail(unmapped 已由上方分支先行报错,此处为其余类型的统一兜底)。

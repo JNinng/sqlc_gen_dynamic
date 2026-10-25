@@ -724,7 +724,9 @@ func validateTable(spec *TableSpec) error {
 	}
 
 	// sortable 列的类型限制:numeric(pgtype.Numeric 无法编码游标值)与
-	// int_array(数组 seek 谓词无法参数化)不可排序。
+	// int_array(数组 seek 谓词无法参数化)不可排序。float4/smallint 放行:
+	// 其模型字段(float32/int16)由 dynq 游标编码分支覆盖,seek 参数按
+	// number/integer 收敛为 float64/int64,PG 跨类型比较不损索引。
 	for _, c := range spec.Columns {
 		if !c.Sortable {
 			continue

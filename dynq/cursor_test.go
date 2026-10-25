@@ -26,8 +26,16 @@ func TestCursorRoundtrip(t *testing.T) {
 	}{
 		{"integer", DataTypeInteger, int64(42)},
 		{"integer ptr", DataTypeInteger, ptr(int64(42))},
+		{"int16", DataTypeInteger, int16(42)},
+		{"int16 ptr", DataTypeInteger, ptr(int16(42))},
+		{"null int16", DataTypeInteger, (*int16)(nil)},
 		{"float", DataTypeNumber, 9.5},
 		{"float ptr", DataTypeNumber, ptr(9.5)},
+		{"float32", DataTypeNumber, float32(9.5)},
+		{"float32 ptr", DataTypeNumber, ptr(float32(9.5))},
+		{"float32 NaN", DataTypeNumber, float32(math.NaN())},
+		{"float32 +Inf", DataTypeNumber, float32(math.Inf(1))},
+		{"null float32", DataTypeNumber, (*float32)(nil)},
 		{"NaN", DataTypeNumber, math.NaN()},
 		{"+Inf", DataTypeNumber, math.Inf(1)},
 		{"-Inf", DataTypeNumber, math.Inf(-1)},
@@ -72,6 +80,33 @@ func TestCursorRoundtrip(t *testing.T) {
 			case *int64:
 				if got := vals[0].(int64); got != *want {
 					t.Fatalf("int64 ptr: %v vs %v", got, *want)
+				}
+			case *int16:
+				if want == nil {
+					if vals[0] != nil {
+						t.Fatalf("want nil, got %#v", vals[0])
+					}
+				} else if got := vals[0].(int64); got != int64(*want) {
+					t.Fatalf("int16 ptr: %v vs %v", got, *want)
+				}
+			case int16:
+				if got := vals[0].(int64); got != int64(want) {
+					t.Fatalf("int16: %v vs %v", got, want)
+				}
+			case *float32:
+				if want == nil {
+					if vals[0] != nil {
+						t.Fatalf("want nil, got %#v", vals[0])
+					}
+				} else if got := vals[0].(float64); got != float64(*want) {
+					t.Fatalf("float32 ptr: %v vs %v", got, *want)
+				}
+			case float32:
+				got := vals[0].(float64)
+				if math.IsNaN(float64(want)) && !math.IsNaN(got) {
+					t.Fatalf("NaN not restored")
+				} else if !math.IsNaN(float64(want)) && got != float64(want) {
+					t.Fatalf("float32: %v vs %v", got, want)
 				}
 			case time.Time:
 				if got := vals[0].(time.Time); !got.Equal(want) {
@@ -185,6 +220,17 @@ func TestCursorSentinelRestoreThenCoerce(t *testing.T) {
 	}
 	if !math.IsNaN(vals[0].(float64)) {
 		t.Fatal("NaN sentinel restored")
+	}
+}
+
+func TestEncodeCursorUnsupportedTypeFails(t *testing.T) {
+	single := []SortField{{Key: "x", Column: "x", DataType: DataTypeString}}
+	_, err := EncodeCursor(CursorFingerprint("u", single), single, []any{struct{ A int }{A: 1}})
+	if err == nil {
+		t.Fatal("unsupported type must be rejected")
+	}
+	if e := AsError(err); e.Kind != KindCursor || !strings.Contains(e.Reason, "cannot encode cursor value") {
+		t.Fatalf("kind/reason: %+v", e)
 	}
 }
 

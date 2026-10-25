@@ -157,6 +157,13 @@ func encodeCursorValue(dt DataType, v any) (any, error) {
 			return nil, nil
 		}
 		return int64(*v), nil
+	case int16: // smallint 的 sqlc 模型字段
+		return int64(v), nil
+	case *int16:
+		if v == nil {
+			return nil, nil
+		}
+		return int64(*v), nil
 	case int:
 		return int64(v), nil
 	case float64:
@@ -166,6 +173,13 @@ func encodeCursorValue(dt DataType, v any) (any, error) {
 			return nil, nil
 		}
 		return formatCursorNumber(*v), nil
+	case float32: // real 的 sqlc 模型字段;float32→float64 精确,seek 按 float8 比较
+		return formatCursorNumber(float64(v)), nil
+	case *float32:
+		if v == nil {
+			return nil, nil
+		}
+		return formatCursorNumber(float64(*v)), nil
 	case uuid.UUID:
 		return v.String(), nil
 	case *uuid.UUID:

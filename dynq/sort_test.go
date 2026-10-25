@@ -91,6 +91,32 @@ func TestResolveSort(t *testing.T) {
 	}
 }
 
+// 禁用目标为default_sort列_缺省回落仍生效_default_sort是表级不变量:
+// DisableSort 只收窄调用点的显式排序能力,不改写生成期表级声明——
+// 缺省回落依旧带 createdAt(并入投影与游标),与 @filter 不受 DisableWhere
+// 影响同构(取舍记录于 dsl.md §3.3)。
+func TestResolveSort_DisableSortTargetsDefaultSortColumn_DefaultSortStillApplies(t *testing.T) {
+	meta := testMeta()
+	cfg, err := NewQueryConfig(meta, DisableSort("createdAt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 显式按 createdAt 排序 → 拒绝
+	if _, err := ResolveSort(meta, cfg, []OrderBy{{Field: "createdAt"}}); err == nil {
+		t.Fatal("explicit sort on disabled field must be rejected")
+	}
+
+	// 缺省回落 → default_sort 依旧生效(createdAt DESC + tiebreaker)
+	seq, err := ResolveSort(meta, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seq) != 2 || seq[0].Key != "createdAt" || !seq[0].Desc || seq[1].Key != "id" || seq[1].Desc {
+		t.Fatalf("default sort must survive DisableSort: %+v", seq)
+	}
+}
+
 func TestOrderBySQLNullsPlacement(t *testing.T) {
 	meta := testMeta()
 	cfg, _ := NewQueryConfig(meta)

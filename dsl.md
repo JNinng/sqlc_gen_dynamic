@@ -403,7 +403,12 @@ COMMENT ON TABLE users IS '用户表 [@default_sort: created_at DESC @pk: id @pa
 查询未指定排序时的缺省回落。同名指令去重(见 §1.2),每表仅生效一次。
 
 - 目标列必须存在、已声明 `@sortable` 且非 `@internal`;
-- 方向必填(大小写不敏感)。
+- 方向必填(大小写不敏感);
+- **不受运行期 `DisableSort` 影响**:default_sort 是表级不变量(生成期声明),
+  `DisableSort` 只收窄调用点的**显式**排序能力,缺省回落依旧生效(该列仍并入
+  投影与游标)。与 `@filter` 不受 `DisableWhere` 影响同构:调用点 opts 是纯减法
+  的能力收窄,不改写表级声明。需要"本调用点连默认排序也换掉"的语义时,由调用方
+  显式传 `OrderBy`(显式排序受 `DisableSort` 约束)。
 
 ### 3.4 `@scope`
 

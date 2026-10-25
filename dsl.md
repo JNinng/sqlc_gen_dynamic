@@ -19,7 +19,7 @@ sqlc\_gen\_dynamic 的全部生成能力声明在 DDL 注释中,随迁移版本�
 | **keyset 分页**        | 基于排序值(而非 `OFFSET`)的分页,即本文档的游标模式。客户端持上一页末行的排序值作 `after` 凭证                                                                                   |
 | **fail-closed**      | 失败时默认拒绝方向(权限语义)。本文档中 `@scope` 的 `params.Scope` 为 nil → List / Count 报错,不退化为全量可见                                                             |
 | **三态** (in\_any)     | 守卫函数返回值的三种语义:`NULL` → 放行全部、`{}`(空数组) → 拒绝全部、非空 → ANY 精确匹配                                                                                   |
-| **预设** (preset)      | `@dynamic` 的快捷名(`exact` / `in` / `range` / `fuzzy` / `has`),展开为多个 op;区别于显式 op 名                                                             |
+| **预设** (preset)      | `@dynamic` 的快捷名(`exact` / `in` / `range` / `fuzzy` / `has`),展开为一个或多个 op;区别于显式 op 名                                                             |
 | **op**               | 操作符,即 `where` 中的比较操作(`eq` / `neq` / `gt` / `contains` 等)                                                                                    |
 | **dataType**         | 字段的数据类型分类(`integer` / `string` / `datetime` / `uuid` / `enum` / `jsonb` / `int_array` 等),由 PG 类型映射而来,决定可用 op 与前端控件族                         |
 | **生成期 fail**         | `sqlc generate` 阶段就报错(生成代码之前),而非运行期。报错定位到具体列与原因                                                                                             |
@@ -116,7 +116,7 @@ COMMENT ON COLUMN users.updated_at IS '更新时间 [@dynamic: range, is_null, n
 - **`is_null`** **/** **`not_null`** **完全独立**:不入任何预设,只能显式声明;唯一前提是列可空,声明于非空列 → 生成期 fail;
 - 声明后产生对应 `ListXxxParams` 字段与占位符生成;无 `@dynamic` 的列不参与过滤能力生成(但仍可写进 `fields` 被返回)。
 
-**未声明** **`@dynamic`** **的列**:不参与过滤能力生成(受 sqlc.yaml 的 `default_ops` 控制;`default_ops=none` 时静默,其他值则按预设策略为未标注列授予 op,仍走类型交集规则)。
+**未声明** **`@dynamic`** **的列**:不参与过滤能力生成(受 sqlc.yaml 的 `default_ops` 控制;`default_ops=none` 时静默,其他值则按预设策略为未标注列授予 op(`@internal` 与 unmapped 列除外),仍走类型交集规则)。
 
 **`default_ops`** **只作用于含** **`@pk`** **的读面**:无 `@pk` 的入选表不生成读面,策略授予的过滤能力会被静默丢弃——`default_ops≠none` 且入选表无 `@pk` → 生成期 fail(出路:补 `@pk`,或 `default_ops: none` 后按列显式 `@dynamic`)。
 
@@ -140,7 +140,7 @@ COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range 
 
 声明该列可参与 ORDER BY。
 
-- 类型限制:`int_array` 列(数组 seek 谓词无法参数化)、`jsonb` 列(jsonb 排序为结构化比较,对前端无可解释语义;仅过滤 / 投影放行)与 `unmapped` 列不可声明 → 生成期 fail;`numeric` 列支持排序——游标值以保留标度的十进制字符串编码,seek 占位符发射 `?::numeric`,比较在服务端以 numeric 精确进行;
+- 类型限制:`int_array` 列(数组 seek 谓词无法参数化)、`jsonb` 列(jsonb 排序为结构化比较,对前端无可解释语义;仅过滤 / 投影放行)、枚举数组(标量形态的游标取值与 seek 均不成立)与 `unmapped` 列不可声明 → 生成期 fail;`numeric` 列支持排序——游标值以保留标度的十进制字符串编码,seek 占位符发射 `?::numeric`,比较在服务端以 numeric 精确进行;
 - 与 `@default_sort` 联动:表级 `@default_sort` 目标列必须已声明 `@sortable`;
 - 与 `@internal` 互斥(组合 → fail)。
 
@@ -522,12 +522,12 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | `uuid`                                                                                                  | `uuid`      | `string`                                 |
 | `jsonb` / `json`                                                                                        | `jsonb`     | `[]byte`(两型统一;仅过滤 / 投影,不可排序——jsonb 排序为结构化比较,对前端无可解释语义;`has` 生成 `(col::jsonb) @> ?::jsonb`,json 列显式 cast 后比较,空值由生成代码的运行期守卫拒绝) |
 | `int4` / `integer` 数组                                                                                   | `int_array` | `[]int64`                                |
-| 其他数组类型                                                                                                  | (不支持)       | 生成期 fail(若列声明了 `@dynamic` / `@sortable` / 非 false 的 `@updatable`) |
+| 其他数组类型                                                                                                  | (不支持)       | 生成期 fail(若列声明了 `@dynamic` / `@sortable` / 非 false 的 `@updatable`;`@dynamic` 的 null op 除外,见下方 unmapped 段) |
 | 枚举类型(`CREATE TYPE ... AS ENUM`)                                                                         | `enum`      | sqlc-gen-go 枚举类型名                        |
 | 枚举数组                                                                                                    | (不支持)       | 生成期 fail(若列声明了 `@dynamic` / `@sortable` / 非 false 的 `@updatable` 或命中 `default_ops`);纯投影放行 |
-| 其他未知类型                                                                                                  | `unmapped`  | 不参与过滤 / 排序 / 写入,只作为普通返回列                   |
+| 其他未知类型                                                                                                  | `unmapped`  | 不参与排序 / 写入与值 op 过滤,只作为普通返回列;可空列可显式声明 `is_null` / `not_null`(见下段)                   |
 
-**`unmapped`** **列**:不可映射类型且未声明 `@dynamic` / `@sortable` / 非 false `@updatable` 的列按纯展示列放行(可写进 `fields` 被返回,但不出现在 schema 的 `ops` / `sortable` 中)。声明了过滤 / 排序 / 写入能力但类型不可映射 → 生成期 fail;`@updatable: false` 是惰性声明,不要求类型可映射。
+**`unmapped`** **列**:不可映射类型且未声明 `@dynamic` / `@sortable` / 非 false `@updatable` 的列按纯展示列放行(可写进 `fields` 被返回,但不出现在 schema 的 `ops` / `sortable` 中)。声明了过滤 / 排序 / 写入能力但类型不可映射 → 生成期 fail;`@updatable: false` 是惰性声明,不要求类型可映射。null op 例外:`is_null` / `not_null` 不受能力矩阵约束(§4.4 标注"任意"),unmapped 与其他数组类型的可空列显式声明即可参与过滤(生成 `col IS [NOT] NULL` 谓词);排序与写面仍不可用。
 
 **`decimal`** **与** **`number`** **的分野在游标**:where 面两型同为 `float64` 参数(decimal 另加 `?::numeric` cast);游标面 decimal 的列值为 `pgtype.Numeric`,编码为保留标度的十进制字符串(`Int × 10^Exp`,NaN/±Infinity 为字符串哨兵,精度无损),seek 比较在服务端以 numeric 精确进行——`1.5` 与 `1.50` 编码串不同但等值判定等价。`number`(float4/float8)按 float64 收敛,不承诺十进制精度。
 
@@ -635,7 +635,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | ------------------------------------------------------------------ | ------------------------------------------------------------- |
 | 注释 `[` 未闭合                                                         | 生成期 fail,定位到列                                                 |
 | 指令块内未知 `@xxx` 标签                                                   | 生成期 fail,定位到列与标签名                                             |
-| 弃用旧名 `@hidden` / `@selectable`                                     | **非 fail**:解析为等价新名 + 生成期 deprecation 提示(stderr,每列至多一条,见 §2.7) |
+| 弃用旧名 `@hidden` / `@selectable`                                     | **非 fail**:解析为等价新名 + 生成期 deprecation 提示(stderr,每列每个旧名至多一条,见 §2.7) |
 | `@internal` 与 `@dynamic` / `@sortable` / `@hideable` / `@api` 任一组合 | 生成期 fail(`@updatable` 除外:写能力与协议可见性正交)                        |
 | `@updatable` 保留形态词与 op 项混写(如 `set, eq`)                         | 生成期 fail                                                      |
 | `@updatable` 显式 op 项既非预设也非已知 op                                   | 生成期 fail                                                      |
@@ -655,7 +655,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | `@dynamic` 显式 op 项类型不支持(如对 `bool` 声明 `range`)                      | 生成期 fail                                                      |
 | `@dynamic` 显式 op 项为 `is_null` / `not_null` 且列非空                    | 生成期 fail                                                      |
 | `@dynamic` 展开后无任何 op 命中                                            | 生成期 fail                                                      |
-| `@sortable` 声明在 `jsonb` / `int_array` / `unmapped` 列                       | 生成期 fail                                                      |
+| `@sortable` 声明在 `jsonb` / `int_array` / 枚举数组 / `unmapped` 列                       | 生成期 fail                                                      |
 | `@api` 类型非 `integer` / `uuid` / `string`                           | 生成期 fail                                                      |
 | `@api` 缺 `value_key` / `label_key` 或含未知参数或 `endpoint` 含 `?`        | 生成期 fail                                                      |
 | `@api` 与 `@internal` 组合                                            | 生成期 fail                                                      |

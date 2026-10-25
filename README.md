@@ -4,7 +4,7 @@ sqlc 自定义 codegen 插件:从 DDL 注释 DSL 生成**动态单表 List 查�
 
 ## 环境要求
 
-- Go 1.26+
+- Go 1.26.2+
 - sqlc ≥ v1.31(插件协议 `GenerateRequest` 自 v1.24 起)
 - 本地 PostgreSQL(仅演示 `go run ./example/db` 需要,测试套件无数据库依赖;演示自动重建独立测试库 `sqlc_gen_dynamic_test`,可用 `DYNQ_TEST_ADMIN_DSN` 覆盖管理连接)
 
@@ -72,7 +72,7 @@ COMMENT ON COLUMN users.password IS '密码 [@internal @updatable]';
 COMMENT ON TABLE  users          IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]';
 ```
 
-完整示例(users / orders / customers / projects / sys_user / audit_logs,覆盖全指令)见 [dsl.md §8](./dsl.md#8-完整示例) 与 [example/db/schema.sql](./example/db/schema.sql)。
+完整示例(users / orders / customers / projects / sys_user / sys_resource_grant / audit_logs,覆盖全指令)见 [dsl.md §8](./dsl.md#8-完整示例) 与 [example/db/schema.sql](./example/db/schema.sql)。
 
 ## 查询入参契约(`POST /{resource}/list`)
 
@@ -104,7 +104,7 @@ COMMENT ON TABLE  users          IS '用户表 [@default_sort: created_at DESC @
 | `sort` | `field` | string | 逻辑字段名;仅 `sortable=true` 字段,禁用字段拒绝 |
 | `sort` | `order` | string | `asc`/`desc` 大小写不敏感 |
 | `pagination` | `page` | int | 从 1 起,≤ 0 拒绝;仅 offset 模式生效 |
-| `pagination` | `pageSize` | int | 双模式共用每页条数;显式提供且 ≤ 0、或超 `pagination.maxPageSize` 拒绝;缺省 = `defaultPageSize` |
+| `pagination` | `pageSize` | int | 双模式共用每页条数;显式提供且 ≤ 0、或超资源上限(`_query-schema` 的 `pagination.maxPageSize`)拒绝;缺省 = `defaultPageSize` |
 | `pagination` | `after` | string \| null | **非空即游标模式**(深分页,见下方"游标翻页调用流程");与 `page > 1` 混用 → 400;空串 `""` 非法 |
 | `pagination` | `includeTotal` | bool | 是否计算 total;默认 true;false 时响应 `total` 为 null 且不执行 COUNT |
 
@@ -209,7 +209,7 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
 | `nextCursor` | `hasMore=true` 时的续翻凭证;两模式均返回 |
 | `hasMore` | `LIMIT pageSize+1` 探测结果;offset 模式据此也可判断"还有下一页" |
 
-**错误形态**:所有校验失败返回结构化错误 `{ "kind": "where"\|"sort"\|"fields"\|"pagination"\|"cursor", "field": …, "index": …, "reason": … }`(kind=cursor 定位到游标内容,其余定位到数组下标),无静默修正。
+**错误形态**:所有校验失败返回结构化错误 `{ "kind": "where"\|"sort"\|"fields"\|"pagination"\|"cursor"\|"scope"\|"request", "field": …, "index": …, "reason": … }`(where/sort/fields/pagination 定位到数组下标,kind=cursor 定位到游标内容;scope 与 request 是调用形态错误——权限上下文未注入、请求体畸形——不定位下标),无静默修正。
 
 **typed 门**(内部调用方):直接构造生成的 `ListUsersParams` 结构体(编译期安全),经 `ListUsers` / `CountUsers` 执行;形态复核(禁用命中、Limit/Offset 上限、After 与 Offset 互斥)与协议门汇合于同一路径,错误为 Go error 而非 400。
 

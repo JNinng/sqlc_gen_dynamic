@@ -31,9 +31,10 @@ List 是 sqlc 社区常年 Top 需求，短期无法指望官方支持。
 
 ### 1.3 总体分工
 
-- **固定形态查询**（GetBy / Create / Update / Delete / upsert / JOIN / CTE / 聚合）→ sqlc-gen-go 静态定义
+- **固定形态查询与固定列集写路径**（GetBy / Create / Update / Delete / upsert / JOIN / CTE / 聚合）→ sqlc-gen-go 静态定义
 - **动态单表 List**（前端过滤、排序、分页、动态投影）→ 本插件生成
-- **SQL 拼装** → squirrel，但使用收敛在生成物内部
+- **动态单表更新**（列集不定的内部管理操作，typed 门、无 JSON 协议入口；后续迭代补齐）→ 本插件生成，见 dsl.md §2.6 / §3.6
+- **SQL 拼装** → squirrel，使用收敛在生成物与 dynq 运行时内部，业务层不直接 import
 - **连接与事务** → 完全由 pgx 承担，生成代码经 DBTX 接口注入，自身无状态
 
 ---
@@ -55,7 +56,7 @@ List 是 sqlc 社区常年 Top 需求，短期无法指望官方支持。
    **非目标**
 
 - 跨表 JOIN、CTE、窗口函数的动态化（走 sqlc 静态查询或 Postgres VIEW 包装）。
-- 写路径（增删改）的动态化。
+- 写路径的协议面动态化。动态 UPDATE 的 typed 门（`@updatable` / `@update`）覆盖列集不定的内部管理更新（后续迭代补齐，见 dsl.md §2.6 / §3.6），无 JSON 协议入口；INSERT / DELETE 的动态化仍是非目标。
 - **条件分组（OR / 嵌套组合）**：where 数组恒为 AND 语义，不支持 OR 与括号分组。需要 OR 的场景走 sqlc 静态查询。此为协议级约束，前端
   QueryBuilder 不提供分组 UI。
 - 反向游标（`before`）与游标化随机跳页——跳页仍由 offset 承担并受上限约束。
@@ -84,9 +85,9 @@ dynq.DecodeQuery ──▶ ParseUsersQuery(q, opts...)   ListUsersParams{...}（
               ② validateUsersParams（形态复核，List/Count 共享）
               ③ 有效排序解析（用户排序 / @default_sort / tiebreaker / NULLS 方位）
               ④ 游标解码 + 指纹比对 + 值类型收敛（双门唯一路径）
-              ⑤ buildUsersSelect（投影 = 请求字段 ∪ 有效排序列）
+              ⑤ dynq.SelectColumns（投影 = 请求字段 ∪ 有效排序列）
               ⑥ buildUsersWhere（过滤，List / Count 共享）
-              ⑦ buildUsersSeek（游标定位，仅 List 追加）
+              ⑦ dynq.SeekPredicate（游标定位，仅 List 追加）
                                    │
                          UsersQuerySchema(opts...) ──▶ GET /users/_query-schema
                                    │
@@ -103,8 +104,8 @@ dynq.DecodeQuery ──▶ ParseUsersQuery(q, opts...)   ListUsersParams{...}（
 ### 3.2 核心不变量
 
 1. **三投影同源**：协议校验白名单、typed Params、前端 schema 由同一份生成期元数据在同一模板循环中产出。同源性由构造保证，物理上不可能漂移。
-2. **生成代码为纯函数**：签名统一为 `(ctx, DBTX, params, opts...)`，不持有连接状态；无副作用。
-3. **squirrel 边界**：仅出现在生成物内部，业务层不直接 import；所有 builder 使用 `sq.Dollar` 占位符格式。
+2. **生成代码为纯函数**：读面签名统一为 `(ctx, DBTX, params, opts...)`，更新面为 `(ctx, DBTX, opts...)`（SET / WHERE 载荷即选项）；不持有连接状态，无副作用。
+3. **squirrel 边界**：仅出现在生成物与 dynq 运行时内部，业务层不直接 import；所有 builder 使用 `sq.Dollar` 占位符格式。
 4. **物理列名不外泄**：所有对外输入与输出（协议字段名、Params 字段、协议错误、前端
    schema、游标）只使用逻辑字段名（camelCase）与列值。snake_case 物理列名不是任何输入面的合法拼写。
 5. **过滤 WHERE 单一事实源**：List 与 Count 共享同一过滤 WHERE 构造函数；游标 seek 谓词与 LIMIT 仅作用于 List。total 语义 =
@@ -149,7 +150,7 @@ dynq.DecodeQuery ──▶ ParseUsersQuery(q, opts...)   ListUsersParams{...}（
 | `package`                        | 产物包名                                     |
 | `model_import` / `model_package` | 块 1 产物位置（复用其模型类型与 DBTX）                  |
 | `schema`                         | 目标 schema，默认 `public`                    |
-| `tables`                         | 生成范围；缺省为该 schema 下所有含 `@dynamic` 声明的表    |
+| `tables`                         | 生成范围；缺省为该 schema 下所有含 `@dynamic` / `@pk` / set-capable `@updatable` 声明的表    |
 | `default_ops`                    | 未标注列的策略，默认 `none`（显式声明才生成，防 Params 字段爆炸） |
 | `go_type_overrides`              | 逃生舱，镜像 sqlc-gen-go 的类型覆盖                 |
 | `runtime_import`                 | dynq 运行时包导入路径                            |
@@ -185,8 +186,8 @@ diff。CI 中 sqlc 版本固定。
 ### 5.2 DSL 语法与边界隔离
 
 为消除人类自然语言注释与机器解析指令的歧义，DSL 引入**边界分隔符**，指令必须包裹在 `[ ]` 中且内容以 `@` 起始。
-**列级**：`<label> [@dynamic: <项,项,...>] [@sortable] [@internal] [@hideable] [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]`
-**表级**：`[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>] [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...] [@filter: <列> <op> [字面量] ...]`
+**列级**：`<label> [@dynamic: <项,项,...>] [@sortable] [@internal] [@updatable: <auto|set|where|false|<op,op,...>>] [@hideable] [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]`
+**表级**：`[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>] [@update: <true|false|auto>] [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...] [@filter: <列> <op> [字面量] ...]`
 
 > 列级指令的现行名为 `@internal` / `@hideable`；旧名 `@hidden` / `@selectable` 在兼容期解析为等价能力（生成期输出 deprecation 提示，计划 v0.6.0 移除），新 DDL 应使用现行名。
 
@@ -219,8 +220,8 @@ where 值控件的 options 经 `GET/POST {endpoint}` 拉取，而非静态 `enum
    字面文本，方括号原样保留（如上例“状态 [已废弃]”）。人类注释中的方括号因此不会误伤。
 3. **Label 纯洁性**：非指令块文本（含其中出现的任何 `@` 符号与方括号）原样保留为展示文本，不触发任何解析逻辑。
 4. **多指令块**：同一列允许多个指令块，按出现顺序合并解析；同名指令重复声明等价于声明一次（去重）。
-5. **指令识别**：合法列级指令为 `@dynamic` / `@sortable` / `@internal` / `@hideable` / `@api`；合法表级指令为 `@default_sort` /
-   `@page` / `@pk` / `@scope` / `@filter`。`[ ]` 内出现白名单外的 `@xxx`（如手误 `@sortble`）→ **生成期 fail**，报错定位到具体列与未知标签名，杜绝静默忽略导致的能力丢失。
+5. **指令识别**：合法列级指令为 `@dynamic` / `@sortable` / `@internal` / `@hideable` / `@updatable` / `@api`；合法表级指令为 `@default_sort` /
+   `@page` / `@pk` / `@update` / `@scope` / `@filter`。`[ ]` 内出现白名单外的 `@xxx`（如手误 `@sortble`）→ **生成期 fail**，报错定位到具体列与未知标签名，杜绝静默忽略导致的能力丢失。
 6. **无 `[ ]` 或无指令块的纯文本注释**：纯业务说明，直接作为 label，跳过解析。
 7. **无 `@dynamic` 的列**不参与过滤能力生成（受 `default_ops` 控制）。
 8. **`is_null` / `not_null` 完全独立**：二者互不捆绑、不入任何预设；列可空不会自动获得它们，必须逐个显式声明；声明于非空列 →
@@ -236,8 +237,9 @@ where 值控件的 options 经 `GET/POST {endpoint}` 拉取，而非静态 `enum
     | 正向标记任意组合 | ✓ | ✓ | 有 `@hideable` 才渲染 | 有 `@dynamic` 才可 | 有 `@sortable` 才可 |
     | `@internal` | ✗ 永不 | ✗ | 不出现在 schema | ✗ | ✗ |
     | `@internal` 与任一正向标记组合 | **生成期 fail** | | | | |
-    - `@internal` 是**全能力排除**标记：该列不参与动态层的任何能力（投影、点名、过滤、排序、schema 输出），仅经 sqlc 静态查询访问。
-      `@internal` 与 `@dynamic` / `@sortable` / `@hideable` 组合声明 → 生成期 fail。
+    - `@internal` 是**全能力排除**标记：该列不参与动态读面的任何能力（投影、点名、过滤、排序、schema 输出），除经 `@updatable`
+      服务端赋值外仅经 sqlc 静态查询访问。`@internal` 与 `@dynamic` / `@sortable` / `@hideable` / `@api` 组合声明 → 生成期 fail
+      （`@updatable` 例外：写能力与协议可见性正交）。
     - `@hideable` 是**纯 UI 提示**：服务端 `fields` 点名白名单 = 全部非 `@internal` 列；`@hideable` 不参与服务端校验，仅流入前端
       schema 决定列头渲染与显隐交互。
 11. **表级指令校验**：`@default_sort` 的目标列必须存在、已声明 `@sortable` 且非 `@internal`，方向必填，否则生成期 fail；`@page`
@@ -385,7 +387,7 @@ Params 目标字段（含 `between` 拆分出的 Gte/Lte 与独立 `gte`/`lte` �
 - 编码：`base64url(JSON{ "f": "<FNV-64 十进制字符串>", "v": [<列值>, ...] })`，`v` 为有效排序（含 tiebreaker）依序的列值；`f`
   编码为字符串避免 JS 大整数精度问题。
 - 排序指纹 `f`：`FNV-64(资源名 ‖ 有效排序全序列的逻辑列名 + 方向)`。**掺入资源名**使跨表同规格排序（如多表都有
-  `created_at DESC, id DESC`）的游标互不通用；换排序、跨表、跨能力视图复用旧游标 → 指纹不符 → 400。指纹不含 pageSize。
+  `created_at DESC, id DESC`）的游标互不通用；换排序、跨表复用旧游标 → 指纹不符 → 400。指纹只含资源名与有效排序——能力视图差异（opts 禁用）仅在其改变有效排序时才被拦截。指纹不含 pageSize。
 - **值编码**：datetime 为 RFC3339、date 为 `YYYY-MM-DD`、number 中的 `NaN` / `Infinity` / `-Infinity` 编码为同名**字符串哨兵
   **（JSON 无法原生表示，Go json.Marshal 对 NaN 直接报错），解码时还原并仍走类型收敛；其余类型原生 JSON。
 - 不签名：游标仅定位“调用方本就可发起的同一查询”的读取位置，不构成权限边界；解码后所有值仍走参数化占位符与严格类型收敛，篡改最坏导致空集或
@@ -393,9 +395,9 @@ Params 目标字段（含 `between` 拆分出的 Gte/Lte 与独立 `gte`/`lte` �
 - 值收敛：游标列值逐个经类型收敛函数与当次有效排序列的 dataType 比对，不符 → 400。
   **有效排序解析（查询函数内统一执行）**
 
-1. `params.OrderBy` 非空 → 校验每个字段 ∈ registry、已声明 `@sortable`、未被 opts 禁用（否则 error）。
+1. `params.OrderBy` 非空 → 校验每个字段 ∈ registry、非 `@internal`、已声明 `@sortable`、未被 opts 禁用（否则 error）。
 2. 为空 → 回落表级 `@default_sort`。
-3. 末列若非主键 → 无条件追加主键 ASC 作 tiebreaker；末列已为主键则不重复追加。tiebreaker 保证全序，使 OFFSET 翻页与游标定位双重确定。
+3. 末列若非 `@pk` 列 → 无条件追加 `@pk` 列 ASC 作 tiebreaker；末列已为 `@pk` 列则不重复追加。`@pk` 是读面入选的必填表级声明（§5.3），tiebreaker 由此保证全序，使 OFFSET 翻页与游标定位双重确定。
 4. 生成的 ORDER BY **显式写出 NULLS 方位**：ASC → `NULLS LAST`，DESC → `NULLS FIRST`（即 Postgres 默认方位，显式写出以与
    seek 模板一一对应、杜绝歧义）。
    **seek 谓词（精确规范）**
@@ -460,7 +462,7 @@ P = K(c1,v1) ∨ ( E(c1,v1) ∧ K(c2,v2) ) ∨ … ∨ ( E(c1,v1) ∧ … ∧ E(
 
 | dataType                        | eq/neq | in/not_in   | gt/gte/lt/lte/between | contains/prefix/suffix | has |
 |---------------------------------|--------|-------------|-----------------------|------------------------|-----|
-| integer, number, datetime, date | ✓      | ✓           | ✓                     | —                      | —   |
+| integer, number, decimal, datetime, date | ✓      | ✓           | ✓                     | —                      | —   |
 | string                          | ✓      | ✓           | —                     | ✓                      | —   |
 | boolean, uuid, enum             | ✓      | ✓           | —                     | —                      | —   |
 | jsonb                           | —      | —           | —                     | —                      | ✓   |
@@ -484,7 +486,8 @@ P = K(c1,v1) ∨ ( E(c1,v1) ∧ K(c2,v2) ) ∨ … ∨ ( E(c1,v1) ∧ … ∧ E(
 
 ## 8. 生成物契约
 
-按表生成，每表四件套 + 字段常量，落于独立子包。**文件命名规则**：统一加 `_dynamic_gen` 后缀（如 `users_dynamic_gen.go`
+按表生成：有 `@pk` 的表产读面（registry / 字段常量 / Params / Parse / Schema / List / Count），含 set-capable `@updatable`
+列的表另产 typed 更新面，无 `@pk` 的入选表只产更新面；产物与块 1 同包（默认）或经 `model_import` 跨包。**文件命名规则**：统一加 `_dynamic_gen` 后缀（如 `users_dynamic_gen.go`
 ），与其他生成器或手写代码在物理层清晰区分。
 **命名约定（表 users 为例）**：
 | 产物 | 规则 | 示例 |
@@ -494,6 +497,9 @@ P = K(c1,v1) ∨ ( E(c1,v1) ∧ K(c2,v2) ) ∨ … ∨ ( E(c1,v1) ∧ … ∧ E(
 | 解析函数 | `Parse` + 复数资源 + `Query` | `ParseUsersQuery` |
 | schema 函数 | 复数资源 + `QuerySchema` | `UsersQuerySchema` |
 | 字段常量 | 单数实体 + `Field` | `UserField` |
+| 更新函数 | `Update` + 复数资源 | `UpdateUsers` |
+| 更新选项三符号 | 单数实体 + `Table` / `Update` / `UpdateOption` | `UserTable` / `UserUpdate` / `UserUpdateOption` |
+| Set / Where 选项方法 | `Set` / `Where` + camel 字段名 + op 后缀 | `SetName` / `WhereIDEq` |
 
 ### 8.1 registry 与字段常量
 
@@ -526,6 +532,7 @@ var UserField = struct {
 | `Neq` / `In` / `NotIn` | neq / in / not_in |
 | `Gt` `Gte` `Lt` `Lte` | gt / gte / lt / lte；between 落到 Gte + Lte 两字段 |
 | `Contains` / `Prefix` / `Suffix` | contains / prefix / suffix（零值 `""` = 不参与） |
+| `Has` | has（jsonb 包含，类型为列 GoType 即 `[]byte`；空切片运行期显式拒绝） |
 | `IsNull bool` / `NotNull bool` | is_null / not_null（各自独立字段，false = 不参与，非指针；同时为 true → error） |
 | `OrderBy []dynq.OrderBy` | 元素为**逻辑字段名 + 方向**的 typed 结构（见下），物理映射收敛在生成物内部 |
 | `Limit` / `Offset uint32` | offset 模式归一化结果；typed 门 Limit=0 视为采用表默认 pageSize |
@@ -555,22 +562,23 @@ func CountUsers(ctx context.Context, db DBTX, params ListUsersParams, opts ...dy
 1. opts → `QueryConfig`（禁用目标对照 registry，未知含跨表误用 → error）。
 2. `validateUsersParams(params, cfg)`——**共享形态复核**（List / Count 同一份）：
     - where 域：params 中禁用字段携带非零值 → error（显式拒绝，不静默剔除）；
-    - sort 域：OrderBy 含禁用或不可排序字段 → error；
     - select 域：SelectFields 含禁用、`@internal` 或未知字段 → error；
-    - `IsNull` 与 `NotNull` 同真、`After` 与 `Offset > 0` 并存 → error；
-    - Limit 超上限、offset 模式 Offset 超上限 → error。
-3. **有效排序解析**（§6.5）：用户排序 / `@default_sort` 回落 / 主键 tiebreaker / 显式 NULLS 方位。
+    - `IsNull` 与 `NotNull` 同真 → error。
+    随后 `dynq.CheckPagination(registry, Limit, Offset, After)` 单独校验分页形态：`After` 与 `Offset > 0` 并存、
+   Limit 超上限、offset 模式 Offset 超上限 → error（List / Count 均执行）。排序校验不在其中——有效排序校验
+   单点于步骤 3 的 `dynq.ResolveSort`，仅 List 执行；Count 忽略排序，OrderBy 含禁用字段不会被 Count 拦截。
+3. **有效排序解析**（§6.5）：`dynq.ResolveSort` 执行用户排序校验 / `@default_sort` 回落 / `@pk` tiebreaker / 显式 NULLS 方位。
 4. **游标校验**：`After` 非空 → 解码、指纹比对（资源名 + 有效排序）、列值逐个类型收敛比对 dataType；不符 → error（Kind =
    cursor）。此为双门唯一校验路径。
-5. `buildUsersSelect(params, cfg) []string`——**投影并集**：
+5. `dynq.SelectColumns(registry, params.SelectFields, 有效排序)`——**投影并集**：
    `(SelectFields 映射的物理列；nil → 全部非 internal 列) ∪ 有效排序列（含 tiebreaker)`，去重。排序列强制并入是游标构造与
    hasMore 探测的前提；sortable 蕴含非 internal，故并入集不可能含敏感列。
-6. `buildUsersWhere(params, cfg) []sq.SqlBuilder`——过滤条件，List / Count 唯一事实源。
-7. `buildUsersSeek(...)`——游标定位谓词（§6.5 模板），仅游标模式追加。
+6. `buildUsersWhere(params) []sq.Sqlizer`——过滤条件，List / Count 唯一事实源。
+7. `dynq.SeekPredicate(有效排序, 游标列值)`——游标定位谓词（§6.5 模板），仅游标模式追加。
 8. `LIMIT Limit + 1` + ORDER BY 执行；结果扫描用 `pgx.CollectRows(rows, pgx.RowToStructByNameLax[model.User])`（窄投影缺列
    留零值；按值返回 `[]model.User`，与 `Result.Items []T` 匹配；pgx struct tag 完成列名→字段映射）。
 9. 由第 Limit 行构造 `NextCursor` / `HasMore`。
-   **CountUsers**：执行步骤 1、2 + `buildUsersWhere` + `COUNT(*)`；忽略投影、排序与游标（参数形态错误仍由步骤 2 拦截）。
+   **CountUsers**：执行步骤 1、2 + `buildUsersWhere` + `COUNT(*)`；忽略投影、排序与游标（where / select 形态错误仍由步骤 2 拦截，排序不校验）。
 
 - **排序注入防护**：仅白名单拼接；无有效排序时回落 `@default_sort`；tiebreaker 保证确定性。
 - **窄投影零值语义**：未查询的列在结果结构体中为零值，调用方无法区分“未查 / NULL / 真零值”——这是动态投影的固有语义；需要区分时由
@@ -603,6 +611,7 @@ func UsersQuerySchema(opts ...dynq.QueryOption) dynq.ResourceSchema
 返回 `dynq.ResourceSchema`：资源名、字段列表（field、label、dataType、可空、sortable、hideable、op 集、枚举值；
 `hideable` 为主键，过渡期同值输出旧键 `selectable`）、
 默认排序、分页参数（含双模式与 includeTotal 说明）。不携带 ui 字段——渲染规则见 §10.2。
+opts 禁用目标不在 registry 属编程错误：Parse / List / Count 返回 error，Schema 签名无 error 返回，以 panic 显式暴露。
 
 - 与 registry 由同一模板循环产出，再经 opts 做与 Parse 完全相同的减法投影：where 禁用 → 该字段 op 集清空；sort 禁用 →
   sortable = false；select 禁用 → hideable = false。字段被完全禁用（或原 `@internal`）则不出现在 schema 中。
@@ -635,7 +644,7 @@ func UsersQuerySchema(opts ...dynq.QueryOption) dynq.ResourceSchema
 
 ```go
 type Error struct {
-Kind   string // "where" | "sort" | "fields" | "pagination" | "cursor" | "scope" | "option" | "request"
+Kind   string // "where" | "set" | "sort" | "fields" | "pagination" | "cursor" | "scope" | "option" | "request"
 Index  int    // 数组下标
 Field  string
 Reason string // 如 "unknown field" / "op not allowed" / "field disabled in this context"
@@ -734,7 +743,7 @@ schema 输出字段级 `api` 对象：
 | 游标解码失败 / 列值类型不符（含哨兵还原失败）/ 排序指纹不符（含跨表复用）                                  | 400 / error（Reason 精确定位，Kind = cursor） |
 | 类型不符（字符串数字等）                                                             | 400                                    |
 | 未知 JSON 键 / 请求体超 1MB                                                     | 400                                    |
-| opts 禁用目标不在 registry（含跨表误用）                                              | 调用方 error（编程错误显式暴露，非 400）              |
+| opts 禁用目标不在 registry（含跨表误用）                                              | 调用方 error；Schema 出口为 panic（签名无 error 返回）——编程错误显式暴露，非 400 |
 | typed params 命中禁用字段（where 值 / OrderBy / SelectFields）                    | error                                  |
 | After 与 Offset 并存（typed 门）                                               | error                                  |
 | Limit / Offset 超上限（typed 门）                                              | error                                  |
@@ -749,8 +758,9 @@ schema 输出字段级 `api` 对象：
 1. 所有值经占位符参数化，无任何用户值进入 SQL 文本——包括游标内的列值与 NaN/Infinity 哨兵值。
 2. **投影白名单严格校验**：ORDER BY 的列名与方向、SELECT 的列名、WHERE 的 field、op 四者全部白名单，白名单在生成期固化为代码字面量；无
    `Sprintf` 直拼路径；seek 谓词的列名与方向来自同一白名单的有效排序。
-3. **敏感字段全能力隔离**：`@internal` 列不参与动态层任何能力——物理上不可能出现在 SELECT 子句、WHERE 过滤、ORDER BY 排序、前端
+3. **敏感字段全能力隔离**：`@internal` 列不参与动态读面的任何能力——物理上不可能出现在 SELECT 子句、WHERE 过滤、ORDER BY 排序、前端
    schema、游标值中（sortable ⇒ 非 @internal，保证强制并入投影的排序列不含敏感列）；`@internal` 与正向标记组合在生成期即 fail。
+   写面经 `@updatable` 可服务端赋值（`@internal` + `@updatable` 合法，服务端可写、协议不可见），协议面无写入通道。
 4. **模糊三 op 的 value 全量转义** `%`、`_`、`\` 后再拼 ILIKE 模式，通配符位置由 op 决定——用户输入不可能注入通配符。
 5. 物理列名不进入任何对外输入输出；snake_case 不是合法协议拼写；游标只含排序指纹（掺资源名的哈希）与列值，不含列名。
 6. 游标不签名：游标仅定位“调用方本就可发起的同一查询”的读取位置，不构成权限边界；解码值经严格类型收敛 + 参数化，篡改最坏导致空集或
@@ -801,7 +811,7 @@ schema 输出字段级 `api` 对象：
 | seek 谓词索引利用   | OR 展开与 `IS NOT DISTINCT FROM` 在多列排序下可能无法充分利用索引；常见“单列排序 + 主键 tiebreaker”场景的首项为纯范围比较，可走排序索引；深翻页性能依赖 `(排序列, 主键)` 复合索引 |
 | timestamp 无时区 | 语义为数据库本地时间；新表一律 timestamptz                                                                                        |
 | OpenAPI 盲区    | 静态文档无法表达字段组合约束，由 `_query-schema` 动态发现补偿                                                                            |
-| squirrel 维护模式 | 使用收敛于生成物内部；替换只改模板不动业务层                                                                                             |
+| squirrel 维护模式 | 使用收敛于生成物与 dynq 运行时内部；替换只动插件模板与 dynq，不动业务层                                                                                             |
 | overrides 盲区  | 见 §7.4 缓解优先级                                                                                                       |
 | 注释 DSL 可见性    | 策略在 DDL 中，IDE 不可跳转；以生成文件头回显补偿                                                                                      |
 | 禁用选项为字符串键     | 经生成字段常量缓解拼错；运行期 registry 校验兜底                                                                                      |
@@ -876,7 +886,7 @@ example/                    # 示例与测试用独立工程
  ├── db/sqlc.yaml           # sqlc 配置（挂载本插件与 sqlc-gen-go）
  └── db/gen/                # 生成物目录
       ├── models.go         # sqlc-gen-go 产物（模型与固定查询示例）
-      └── users_dynamic_gen.go 等  # 本插件产物（每张动态表一份：registry / 字段常量 / Params / Parse / Schema / List / Count）
+      └── users_dynamic_gen.go 等  # 本插件产物（每张动态表一份：registry / 字段常量 / Params / Parse / Schema / List / Count；含 set-capable `@updatable` 列时另含 typed 更新面 Update / Set / Where，无 `@pk` 表只产更新面）
 ```
 
 ---

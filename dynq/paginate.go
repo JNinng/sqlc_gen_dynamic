@@ -40,11 +40,16 @@ func NormalizePagination(meta TableMeta, p *Pagination) (limit uint32, offset ui
 				"after cursor cannot be combined with page > 1", -1)
 		}
 	}
-	offset = uint32(page-1) * uint32(pageSize)
-	if after == nil && offset > MaxOffset {
+	// 上限判定用整除:(page-1)*pageSize > MaxOffset 当且仅当 page-1 >
+	// MaxOffset/pageSize(整除),避免大页码在 int64/uint32 乘法中回绕
+	// (如 page=2^32+2、pageSize=1 曾回绕为 offset=1,静默拿到截断页码的数据)。
+	// 判定通过后乘积 ≤ MaxOffset,uint32 转换与乘法均无回绕;游标模式 page
+	// 已强制为 1,offset 恒为 0。
+	if after == nil && page-1 > MaxOffset/pageSize {
 		return 0, 0, nil, NewErr(KindPagination, "page",
 			"offset exceeds limit "+itoa(MaxOffset)+"; narrow filters or use after cursor", -1)
 	}
+	offset = uint32(page-1) * uint32(pageSize)
 	return uint32(pageSize), offset, after, nil
 }
 

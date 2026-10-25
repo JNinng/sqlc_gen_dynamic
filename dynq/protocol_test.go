@@ -76,6 +76,40 @@ func TestNormalizePagination(t *testing.T) {
 	}
 }
 
+// 大页码乘法_以上限判定拒绝_不回绕为小offset:
+// (page-1)*pageSize 曾以 uint32 乘法计算,page=2^32+2、pageSize=1 回绕为
+// offset=1 静默通过。上限判定改为乘法前的整除((page-1)*pageSize >
+// MaxOffset ⟺ page-1 > MaxOffset/pageSize),无任何回绕通道。
+func TestNormalizePagination_HugePageTimesPageSize_RejectedNotWrapped(t *testing.T) {
+	meta := testMeta() // default 20 / max 200
+
+	// 回绕探针原例:uint32 乘法下 (2^32+1)%2^32 * 1 = 1
+	_, _, _, err := NormalizePagination(meta, &Pagination{Page: ip(1<<32 + 2), PageSize: ip(1)})
+	if err == nil {
+		t.Fatal("page beyond uint32 must be rejected, not wrap around to a small offset")
+	}
+	if e := AsError(err); e.Kind != KindPagination || e.Field != "page" {
+		t.Fatalf("want KindPagination/page, got %+v", e)
+	}
+
+	// int64 乘法同样会回绕:2^62 * 2 溢出为负/小值,整除判定必须先行拦截
+	_, _, _, err = NormalizePagination(meta, &Pagination{Page: ip(1<<62 + 1), PageSize: ip(2)})
+	if err == nil {
+		t.Fatal("page overflowing int64 product must be rejected")
+	}
+
+	// 回绕邻域的合法边界不受误伤:pageSize=1 时 page=100001 → offset=100000
+	// 恰为 MaxOffset,放行;100002 → 100001,拒绝。
+	limit, offset, _, err := NormalizePagination(meta, &Pagination{Page: ip(100001), PageSize: ip(1)})
+	if err != nil || limit != 1 || offset != MaxOffset {
+		t.Fatalf("offset exactly MaxOffset (pageSize=1) must pass: offset=%d err=%v", offset, err)
+	}
+	_, _, _, err = NormalizePagination(meta, &Pagination{Page: ip(100002), PageSize: ip(1)})
+	if err == nil {
+		t.Fatal("offset MaxOffset+1 must be rejected")
+	}
+}
+
 func TestCheckPaginationTypedGate(t *testing.T) {
 	meta := testMeta()
 	// Limit=0 → 表默认

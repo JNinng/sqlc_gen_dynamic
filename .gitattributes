@@ -1,0 +1,4 @@
+# 文本文件统一 LF:生成器产物、gofmt 输出与 golden 夹具均为 LF,索引亦已
+# 全量 LF;显式 eol=lf 覆盖 core.autocrlf,避免 Windows 检出 CRLF 后
+# TestGenerateGolden 逐字节比对误报。text=auto 下二进制文件自动豁免。
+* text=auto eol=lf

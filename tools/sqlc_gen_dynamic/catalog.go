@@ -734,10 +734,11 @@ func validateTable(spec *TableSpec) error {
 		return err
 	}
 
-	// sortable 列的类型限制:int_array(数组 seek 谓词无法参数化)与 unmapped
-	// 不可排序。numeric 可排序:游标值编码为十进制字符串,seek 占位符发射
-	// ?::numeric,比较在服务端以 numeric 精确进行。float4/smallint 放行:
-	// 其模型字段(float32/int16)由 dynq 游标编码分支覆盖,seek 参数按
+	// sortable 列的类型限制:int_array(数组 seek 谓词无法参数化)、jsonb
+	// (jsonb 排序按结构化比较,对前端无可解释语义)与 unmapped 不可排序,
+	// jsonb 仅过滤/投影放行。numeric 可排序:游标值编码为十进制字符串,seek
+	// 占位符发射 ?::numeric,比较在服务端以 numeric 精确进行。float4/smallint
+	// 放行:其模型字段(float32/int16)由 dynq 游标编码分支覆盖,seek 参数按
 	// number/integer 收敛为 float64/int64,PG 跨类型比较不损索引。
 	for _, c := range spec.Columns {
 		if !c.Sortable {
@@ -745,6 +746,9 @@ func validateTable(spec *TableSpec) error {
 		}
 		if c.DataType == "int_array" {
 			return fmt.Errorf("column %s.%s: @sortable not supported for int_array columns", spec.Name, c.Physical)
+		}
+		if c.DataType == "jsonb" {
+			return fmt.Errorf("column %s.%s: @sortable not supported for jsonb columns", spec.Name, c.Physical)
 		}
 		if c.DataType == "unmapped" {
 			return fmt.Errorf("column %s.%s: @sortable requires a mappable type", spec.Name, c.Physical)

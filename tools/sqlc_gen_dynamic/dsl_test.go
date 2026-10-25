@@ -220,6 +220,13 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: "@sortable not supported for int_array columns",
 		},
 		{
+			// sortable 类型限制(jsonb):jsonb 排序按结构化比较,对前端无可
+			// 解释语义;仅过滤/投影放行。
+			name:    "sortable_jsonb",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "meta", "元数据 [@sortable]") },
+			wantErr: "@sortable not supported for jsonb columns",
+		},
+		{
 			// sortable 类型限制(unmapped):不可映射类型在 resolveType 先行拒绝,
 			// validateTable 的 unmapped 分支为防御,不可经声明 @sortable 直达。
 			name: "sortable_unmapped_type",

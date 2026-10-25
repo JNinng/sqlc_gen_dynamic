@@ -140,7 +140,7 @@ COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range 
 
 声明该列可参与 ORDER BY。
 
-- 类型限制:`int_array` 列(数组 seek 谓词无法参数化)、`unmapped` 列不可声明 → 生成期 fail;`numeric` 列支持排序——游标值以保留标度的十进制字符串编码,seek 占位符发射 `?::numeric`,比较在服务端以 numeric 精确进行;
+- 类型限制:`int_array` 列(数组 seek 谓词无法参数化)、`jsonb` 列(jsonb 排序为结构化比较,对前端无可解释语义;仅过滤 / 投影放行)与 `unmapped` 列不可声明 → 生成期 fail;`numeric` 列支持排序——游标值以保留标度的十进制字符串编码,seek 占位符发射 `?::numeric`,比较在服务端以 numeric 精确进行;
 - 与 `@default_sort` 联动:表级 `@default_sort` 目标列必须已声明 `@sortable`;
 - 与 `@internal` 互斥(组合 → fail)。
 
@@ -520,7 +520,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | `varchar` / `character varying` / `bpchar` / `char` / `character` / `text`                              | `string`    | `string`                                 |
 | `bool` / `boolean`                                                                                      | `boolean`   | `bool`                                   |
 | `uuid`                                                                                                  | `uuid`      | `string`                                 |
-| `jsonb` / `json`                                                                                        | `jsonb`     | `[]byte`(两型统一;`has` 生成 `(col::jsonb) @> ?::jsonb`,json 列显式 cast 后比较,空值由生成代码的运行期守卫拒绝) |
+| `jsonb` / `json`                                                                                        | `jsonb`     | `[]byte`(两型统一;仅过滤 / 投影,不可排序——jsonb 排序为结构化比较,对前端无可解释语义;`has` 生成 `(col::jsonb) @> ?::jsonb`,json 列显式 cast 后比较,空值由生成代码的运行期守卫拒绝) |
 | `int4` / `integer` 数组                                                                                   | `int_array` | `[]int64`                                |
 | 其他数组类型                                                                                                  | (不支持)       | 生成期 fail(若列声明了 `@dynamic` / `@sortable` / 非 false 的 `@updatable`) |
 | 枚举类型(`CREATE TYPE ... AS ENUM`)                                                                         | `enum`      | sqlc-gen-go 枚举类型名                        |
@@ -531,7 +531,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 
 **`decimal`** **与** **`number`** **的分野在游标**:where 面两型同为 `float64` 参数(decimal 另加 `?::numeric` cast);游标面 decimal 的列值为 `pgtype.Numeric`,编码为保留标度的十进制字符串(`Int × 10^Exp`,NaN/±Infinity 为字符串哨兵,精度无损),seek 比较在服务端以 numeric 精确进行——`1.5` 与 `1.50` 编码串不同但等值判定等价。`number`(float4/float8)按 float64 收敛,不承诺十进制精度。
 
-**`@sortable`** **的类型限制**:`int_array`(无法参数化 seek 谓词)、枚举数组(标量形态的游标取值与 seek 均不成立)与 `unmapped` 不可声明 `@sortable` → 生成期 fail。
+**`@sortable`** **的类型限制**:`int_array`(无法参数化 seek 谓词)、`jsonb`(排序为结构化比较,对前端无可解释语义)、枚举数组(标量形态的游标取值与 seek 均不成立)与 `unmapped` 不可声明 `@sortable` → 生成期 fail。
 
 ### 4.2 能力矩阵(dataType × 默认可用 op)
 
@@ -655,7 +655,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | `@dynamic` 显式 op 项类型不支持(如对 `bool` 声明 `range`)                      | 生成期 fail                                                      |
 | `@dynamic` 显式 op 项为 `is_null` / `not_null` 且列非空                    | 生成期 fail                                                      |
 | `@dynamic` 展开后无任何 op 命中                                            | 生成期 fail                                                      |
-| `@sortable` 声明在 `int_array` / `unmapped` 列                       | 生成期 fail                                                      |
+| `@sortable` 声明在 `jsonb` / `int_array` / `unmapped` 列                       | 生成期 fail                                                      |
 | `@api` 类型非 `integer` / `uuid` / `string`                           | 生成期 fail                                                      |
 | `@api` 缺 `value_key` / `label_key` 或含未知参数或 `endpoint` 含 `?`        | 生成期 fail                                                      |
 | `@api` 与 `@internal` 组合                                            | 生成期 fail                                                      |

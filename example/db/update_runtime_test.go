@@ -138,6 +138,9 @@ func TestUpdateUsersRuntime(t *testing.T) {
 		if !hasNilStringArg(db.args) {
 			t.Errorf("explicit NULL must be passed as nil *string arg: %v", db.args)
 		}
+		if !strings.Contains(db.query, "role = $") {
+			t.Errorf("explicit NULL must generate SET clause: %s", db.query)
+		}
 	})
 
 	t.Run("enum_in_placeholders", func(t *testing.T) {

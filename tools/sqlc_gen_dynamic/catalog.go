@@ -637,6 +637,14 @@ func validateTable(spec *TableSpec) error {
 		if c.SetCapable {
 			return fmt.Errorf("table %s: @pk column %q must not be set-capable @updatable (primary key is immutable)", spec.Name, c.Physical)
 		}
+		// tiebreaker 游标可编码白名单:tiebreaker 值嵌入分页游标,第二页起
+		// EncodeCursor 才取值,不可编码类型到运行期才暴露失败,生成期先行
+		// fail(unmapped 已由上方分支先行报错,此处为其余类型的统一兜底)。
+		switch c.DataType {
+		case "integer", "number", "decimal", "datetime", "date", "uuid", "boolean", "string", "enum":
+		default:
+			return fmt.Errorf("table %s: @pk column %q has unsupported type %q for cursor encoding (tiebreaker values are embedded in the pagination cursor)", spec.Name, c.Physical, c.DataType)
+		}
 	}
 
 	// @default_sort 目标必须存在、已声明 @sortable 且非 @internal。

@@ -360,8 +360,9 @@ COMMENT ON TABLE audit_logs IS '审计日志 [@pk: id]';
 
 - 形式:`@pk: <列名>`(单个列名,不含空格 / 斜杠);
 - 目标列必须存在、`NOT NULL`、非 `@internal`、类型可映射;
+- 主键列必须游标可编码(tiebreaker 值嵌入分页游标;标量类型白名单:`integer` / `number` / `decimal` / `datetime` / `date` / `uuid` / `boolean` / `string` / `enum`),`jsonb` / 数组 / 不可映射类型作 `@pk` → 生成期 fail;
 - **最小接入形态**:单独声明 `@pk` 即纳入生成(零 `@dynamic` 列时,仅生成 List / Count / Parse / Schema 骨架,无过滤能力);
-- 指向可空列、`@internal` 列或不可映射类型列 → 生成期 fail。
+- 指向可空列、`@internal` 列或游标不可编码类型列 → 生成期 fail。
 
 ### 3.2 `@page`
 
@@ -659,7 +660,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | `@api` 缺 `value_key` / `label_key` 或含未知参数或 `endpoint` 含 `?`        | 生成期 fail                                                      |
 | `@api` 与 `@internal` 组合                                            | 生成期 fail                                                      |
 | 无 `@pk` 且出现读侧指令(或经 `options.tables` 点名却既无读面也无更新面)            | 生成期 fail(无 `@pk` 的纯更新面合法:set-capable + where-capable 同时满足)            |
-| `@pk` 指向不存在 / 可空 / `@internal` / 不可映射类型的列                          | 生成期 fail                                                      |
+| `@pk` 指向不存在 / 可空 / `@internal` / 游标不可编码类型(`jsonb` / 数组 / 不可映射)的列                        | 生成期 fail                                                      |
 | `@default_sort` 目标不存在 / 未 `@sortable` / `@internal` / 不可映射         | 生成期 fail                                                      |
 | `@page` 默认值 > 上限 或 任一 < 1                                          | 生成期 fail                                                      |
 | `@scope` 重复守卫同列                                                    | 生成期 fail                                                      |

@@ -191,6 +191,22 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: "must be NOT NULL",
 		},
 		{
+			// @pk 游标可编码白名单:jsonb tiebreaker 到运行期第二页起才会
+			// 在 EncodeCursor 处失败,生成期先行 fail(fail-fast)。
+			name: "pk_jsonb_not_cursor_encodable",
+			mutate: func(r *pb.GenerateRequest) {
+				users := findTable(r, "users")
+				for _, c := range users.Columns {
+					if c.Name == "meta" {
+						c.NotNull = true
+					}
+				}
+				setComment(r, "users", "meta", "元数据 [@dynamic: has]")
+				users.Comment = "用户表 [@pk: meta]"
+			},
+			wantErr: `has unsupported type "jsonb" for cursor encoding`,
+		},
+		{
 			name: "camel_conflict",
 			mutate: func(r *pb.GenerateRequest) {
 				addColumn(r, "users", "created__at", "TIMESTAMPTZ", true)

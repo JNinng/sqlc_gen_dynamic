@@ -211,11 +211,10 @@ func TestSeekPredicateNullableNULLBranches(t *testing.T) {
 		t.Fatalf("asc non-null:\n got %q\nwant %q", got, want)
 	}
 
-	// 首列游标值为 NULL 的 ASC:全组消除后仍可能有第二项(INDISTINCT NULL 匹配 NULL 组)
-	// 单列排序 + ASC + NULL → 全部消除 → false
+	// 末列(tiebreaker,非空)游标值为 NULL 只可能来自篡改 → 提前返回 false 防御。
+	// "全组消除 → false"分支(sort.go:150)为防御分支:现实序列末列恒为非空
+	// tiebreaker、游标值非 NULL,该分支不可达,无现实用例可构造。
 	single := seqOf(t, meta, []OrderBy{{Field: "score", Desc: false}})
-	// 长度 2(score,id);构造 score 为 NULL 且 id 也为 NULL 的场景不存在(id 非空),
-	// 这里直接验证 id NULL 的防御路径:last col NULL → false
 	p, _ = SeekPredicate(single, []any{9.5, nil})
 	if got := sqlize(t, p); got != "false" {
 		t.Fatalf("last null defends as false, got %q", got)
@@ -261,5 +260,33 @@ func TestCursorFingerprint(t *testing.T) {
 	seqC := seqOf(t, meta, []OrderBy{{Field: "createdAt"}})
 	if CursorFingerprint("users", seqA) == CursorFingerprint("users", seqC) {
 		t.Fatal("direction must matter")
+	}
+}
+
+// TestCursorFingerprintOmitsPageSize 锁定注释契约:指纹只掺资源名与有效排序
+// (key + 方向),不含分页参数——调用方调整每页条数后重算的指纹不变,
+// 上一页的游标仍可解码续翻。
+func TestCursorFingerprintOmitsPageSize(t *testing.T) {
+	meta := testMeta()
+	// 模拟两次请求(如 limit=20 与 limit=50):各自 ResolveSort 得到相同有效排序。
+	seqA := seqOf(t, meta, nil)
+	seqB := seqOf(t, meta, nil)
+	// 在"第一次请求"下铸造游标,在"第二次请求"的重算指纹下解码必须成功。
+	fpA := CursorFingerprint("users", seqA)
+	// 默认排序为 createdAt DESC + id ASC:两列值与之一一对应。
+	vals := []any{mustTime(t, "2026-08-01T12:00:00Z"), int64(7)}
+	cur, err := EncodeCursor(fpA, seqA, vals)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	got, err := DecodeCursor(cur, CursorFingerprint("users", seqB), seqB)
+	if err != nil {
+		t.Fatalf("decode under recomputed fingerprint: %v", err)
+	}
+	if ts, ok := got[0].(time.Time); !ok || !ts.Equal(mustTime(t, "2026-08-01T12:00:00Z")) {
+		t.Fatalf("datetime: got %#v, want 2026-08-01T12:00:00Z", got[0])
+	}
+	if id, ok := got[1].(int64); !ok || id != int64(7) {
+		t.Fatalf("tiebreaker: got %#v, want 7", got[1])
 	}
 }

@@ -14,10 +14,6 @@ import (
 )
 
 func TestCursorRoundtrip(t *testing.T) {
-	meta := testMeta()
-	seq := seqOf(t, meta, []OrderBy{{Field: "updatedAt", Desc: true}}) // updatedAt DESC, id ASC
-	fp := CursorFingerprint("users", seq)
-
 	createdAt := mustTime(t, "2026-08-01T12:30:45.123456+08:00")
 	uid := uuid.MustParse("0f14d0ab-9605-4a62-a9e4-5ed26688389b")
 
@@ -140,7 +136,6 @@ func TestCursorRoundtrip(t *testing.T) {
 			}
 		})
 	}
-	_ = fp
 }
 
 // hugeInt 构造超出 int64 的十进制整数(测试辅助)。
@@ -335,7 +330,15 @@ func TestCursorArityAndTypeMismatch(t *testing.T) {
 	}
 	strOnly := []SortField{{Key: "s", Column: "s", DataType: DataTypeString}}
 	strCur, _ := EncodeCursor(CursorFingerprint("u", strOnly), strOnly, []any{"s"})
-	_ = strCur
+	// 指纹不含 dataType:同 key 同方向的 integer seq 指纹与 string seq 相同,
+	// string 游标值在 integer 列上解码时被类型收敛拒绝。
+	intOnly := []SortField{{Key: "s", Column: "s", DataType: DataTypeInteger}}
+	if CursorFingerprint("u", strOnly) != CursorFingerprint("u", intOnly) {
+		t.Fatal("fingerprint must not depend on dataType")
+	}
+	if _, err := DecodeCursor(strCur, CursorFingerprint("u", intOnly), intOnly); err == nil {
+		t.Fatal("string cursor value on integer field must be rejected")
+	}
 	// 类型不符:datetime 游标列值给整数
 	dtSeq := []SortField{{Key: "t", Column: "t", DataType: DataTypeDatetime, Nullable: true}}
 	raw := `{"f":"` + strconv.FormatUint(CursorFingerprint("u", dtSeq), 10) + `","v":[42]}`

@@ -296,7 +296,7 @@ func (tc *tableCode) registrySection() string {
 	for _, c := range spec.Columns {
 		b.WriteString("\t\t{\n")
 		fmt.Fprintf(&b, "\t\t\tKey:        %q,\n", c.Key)
-		fmt.Fprintf(&b, "\t\t\tColumn:     %q,\n", c.Physical)
+			fmt.Fprintf(&b, "\t\t\tColumn:     %q,\n", c.SQLName)
 		fmt.Fprintf(&b, "\t\t\tLabel:      %q,\n", c.Label)
 		fmt.Fprintf(&b, "\t\t\tDataType:   %s,\n", dataTypeOrRaw(c.DataType))
 		fmt.Fprintf(&b, "\t\t\tNullable:   %v,\n", c.Nullable)
@@ -693,7 +693,7 @@ func lowerFirst(s string) string {
 
 func tableNameQualified(name string, opts *Options) string {
 	if opts.Schema != "" && opts.Schema != "public" {
-		return opts.Schema + "." + name
+		return sqlIdent(opts.Schema) + "." + sqlIdent(name)
 	}
-	return name
+	return sqlIdent(name)
 }

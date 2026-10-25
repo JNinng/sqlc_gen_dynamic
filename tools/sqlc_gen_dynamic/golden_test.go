@@ -292,11 +292,53 @@ func TestTableNameQualified(t *testing.T) {
 		{"", "users"},
 		{"public", "users"},
 		{"private", "private.users"},
+		// 保留字 schema/表名按需引号化(见 ident.go),安全名不受影响。
+		{"order", `"order".users`},
+		{"private", "private.\"check\""},
 	}
 	for _, tc := range cases {
 		opts := &Options{Schema: tc.schema}
-		if got := tableNameQualified("users", opts); got != tc.want {
+		name := "users"
+		if strings.Contains(tc.want, `"check"`) {
+			name = "check"
+		}
+		if got := tableNameQualified(name, opts); got != tc.want {
 			t.Errorf("schema %q: got %q, want %q", tc.schema, got, tc.want)
+		}
+	}
+}
+
+// 保留字表名/列名_按需引号化_产物SQL合法:表 order(RESERVED)与列
+// check(RESERVED)的物理名发射进 SQL 文本时统一加双引号;裸名与逻辑键
+// (camelCase 键、错误文案、指令回显)不受影响。
+func TestGenerateReservedWordNamesQuotedInSQL(t *testing.T) {
+	req := loadGoldenRequest(t)
+	addPkTable(req, "order")
+	ord := findTable(req, "order")
+	ord.Columns = append(ord.Columns, &pb.Column{
+		Name:    "check",
+		NotNull: true,
+		Type:    &pb.Identifier{Name: "int8"},
+	})
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	src := mustFile(t, resp, "order_dynamic_gen.go")
+	for _, want := range []string{
+		`Table:    "\"order\""`,
+		`sq.Select(cols...).From("\"order\"")`,
+		`sq.Select("COUNT(*)").From("\"order\"")`,
+		`Column:     "\"check\""`,
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("quoted identifier surface missing %q", want)
+		}
+	}
+	// 逻辑键与裸物理名的既有契约不变:registry 键仍为 camelCase 逻辑键。
+	for _, want := range []string{`Key:        "check"`, `Resource: "order"`} {
+		if !strings.Contains(src, want) {
+			t.Errorf("logical key contract changed, missing %q", want)
 		}
 	}
 }

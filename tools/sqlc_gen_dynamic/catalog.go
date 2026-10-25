@@ -11,7 +11,11 @@ import (
 
 // ColumnSpec 是一列的生成期规格。
 type ColumnSpec struct {
-	Physical   string
+	Physical string
+	// SQLName 是 Physical 在 SQL 文本中的安全引用形态(保留字/非常规名加双
+	// 引号,见 ident.go):全部发射进 SQL 文本的列名一律取本字段;
+	// Physical 保留裸名,用于 DSL 目标匹配与错误文案。
+	SQLName    string
 	Key        string // camelCase 逻辑键
 	GoConst    string // 字段常量结构体成员名(PascalCase)
 	ModelField string // sqlc-gen-go 模型结构体字段名(游标取值用)
@@ -235,6 +239,7 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 
 		c := ColumnSpec{
 			Physical:   col.Name,
+			SQLName:    sqlIdent(col.Name),
 			Key:        camelKey(col.Name),
 			GoConst:    goName(col.Name),
 			ModelField: goName(col.Name),

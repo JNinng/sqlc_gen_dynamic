@@ -95,7 +95,7 @@ func (tc *tableCode) updateSetSection() string {
 			// 使"非空列无 nil 通道"的签名承诺对切片同样成立。
 			fmt.Fprintf(&b, "\t\tif v == nil {\n\t\t\treturn dynq.ErrNilSet(%q)\n\t\t}\n", c.Key)
 		}
-		fmt.Fprintf(&b, "\t\treturn st.Set(%q, %q, %q, v)\n", c.Key, c.Physical, c.whereCast())
+		fmt.Fprintf(&b, "\t\treturn st.Set(%q, %q, %q, v)\n", c.Key, c.SQLName, c.whereCast())
 		b.WriteString("\t}\n}\n\n")
 	}
 	return b.String()
@@ -207,7 +207,7 @@ func updateWhereSignature(c *ColumnSpec, op string) string {
 // 操作符为生成期白名单字面量),槽位冲突与零 where 守卫由 UpdateState 负责。
 func updateWhereBody(c *ColumnSpec, op string) string {
 	key := fmt.Sprintf("%q", c.Key)
-	col := c.Physical
+	col := c.SQLName
 	cast := c.whereCast()
 	switch op {
 	case "eq", "neq", "gt", "gte", "lt", "lte":

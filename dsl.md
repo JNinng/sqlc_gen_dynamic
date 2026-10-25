@@ -55,6 +55,15 @@ COMMENT ON COLUMN users.status IS '状态 [已废弃，仅展示] [@dynamic: exa
 | 指令块内 payload    | `@name: payload` 形式,payload 可含空格(如 `created_at DESC`);遇到下一个 `@token` 结束                                                                                                                                                               |
 | 块内成对 `[ ]` 不终止块 | `@scope` 类型标记 `int[]` / `varchar[]` 的方括号被识别为成对,不误终止指令块                                                                                                                                                                                |
 
+### 1.3 物理列名/表名与 SQL 引号化
+
+DSL 中的物理列名/表名按 catalog 实名书写(与 DDL 完全一致,含大小写)。生成器把物理名发射进 SQL 文本(SELECT 列、ORDER BY、where/SET/WHERE 片段、FROM)时做按需引号化:
+
+- 裸安全标识符(`[a-z_][a-z0-9_]*` 且非 PG 保留字)原样发射;
+- PG 保留字(order、group、user、check、like 等)与大小写敏感名等非常规名自动加双引号,产物 SQL 始终合法;
+- 错误文案、指令回显与逻辑键(camelCase)不受影响,始终用裸名;
+- 生成期不校验不拒绝——引号化对调用方透明,无需为保留字列名改 schema。
+
 ## 2. 列级指令
 
 ### 2.1 `@dynamic`

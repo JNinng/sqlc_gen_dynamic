@@ -301,7 +301,7 @@ func (tc *tableCode) whereSection() string {
 
 // whereCaseLines 生成单个 (字段, op) 的 if-append 语句(单行)。
 func (tc *tableCode) whereCaseLines(c *ColumnSpec, op string) []string {
-	col := c.Physical
+	col := c.SQLName
 	cast := c.whereCast()
 	cond := func(condExpr string, builder string) string {
 		return fmt.Sprintf("if %s { conds = append(conds, %s) }", condExpr, builder)
@@ -383,6 +383,7 @@ var scopeOpSQL = map[string]string{"eq": "=", "gt": ">", "gte": ">=", "lt": "<",
 // {}=拒绝、非空=ANY 匹配),其余为标量比较(col = fn(...) 等,NULL 列对
 // 比较恒为假,不可见,fail-closed 方向)。
 func (tc *tableCode) scopeGuardExpr(g *scopeGuard) string {
+	gcol := sqlIdent(g.Column)
 	var callArgs, valExprs []string
 	for _, a := range g.Args {
 		if a.Literal != "" {
@@ -408,15 +409,15 @@ func (tc *tableCode) scopeGuardExpr(g *scopeGuard) string {
 		valExprs = append(valExprs, "params.Scope."+p.GoConst)
 	}
 	call := g.Fn + "(" + strings.Join(callArgs, ", ") + ")"
-	frag := g.Column + " " + scopeOpSQL[g.Op] + " " + call
+	frag := gcol + " " + scopeOpSQL[g.Op] + " " + call
 	if g.Op == "in" {
-		frag = g.Column + " IN (SELECT * FROM " + call + ")"
+		frag = gcol + " IN (SELECT * FROM " + call + ")"
 	}
 	if g.Op == "in_any" {
 		// frag 自带外层括号:sq.Expr 不参与 squirrel 的自动加括号,顶层 OR
 		// 若裸露会与业务条件的 AND 发生优先级错乱(NULL 放行将绕过业务过滤)。
 		// fn 调用出现两次 → 占位参数相应双份。
-		frag = "(" + call + " IS NULL OR " + g.Column + " = ANY(" + call + "))"
+		frag = "(" + call + " IS NULL OR " + gcol + " = ANY(" + call + "))"
 		valExprs = append(valExprs, valExprs...)
 	}
 	if len(valExprs) == 0 {
@@ -429,13 +430,14 @@ func (tc *tableCode) scopeGuardExpr(g *scopeGuard) string {
 // 为无参谓词;eq/比较类的字面量经分词器校验后作为 Go 字面量经占位符传入
 // (不拼进 SQL 文本,零注入面;字符串字面量经 strconv.Quote 安全落源码)。
 func (tc *tableCode) filterExpr(f *filterDirective) string {
+	col := sqlIdent(f.Column)
 	switch f.Op {
 	case "is_null":
-		return fmt.Sprintf("sq.Expr(%q)", f.Column+" IS NULL")
+		return fmt.Sprintf("sq.Expr(%q)", col+" IS NULL")
 	case "not_null":
-		return fmt.Sprintf("sq.Expr(%q)", f.Column+" IS NOT NULL")
+		return fmt.Sprintf("sq.Expr(%q)", col+" IS NOT NULL")
 	}
-	frag := f.Column + " " + scopeOpSQL[f.Op] + " ?"
+	frag := col + " " + scopeOpSQL[f.Op] + " ?"
 	if f.Quoted {
 		return fmt.Sprintf("sq.Expr(%q, %s)", frag, strconv.Quote(f.Literal))
 	}

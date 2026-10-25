@@ -117,8 +117,10 @@ func ErrEmptyPattern(field FieldName) *Error {
 	return NewErr(KindWhere, string(field), "empty pattern: contains/prefix/suffix must not be empty", -1)
 }
 
-// ErrEmptyJSON 构造空 jsonb 定位值错误:空切片会生成 @> ''::jsonb,由 PG 在
-// 运行期报语法错误而非空结果——与空串模糊定位守卫同层,必须显式拒绝。
+// ErrEmptyJSON 构造空 jsonb 定位值错误:空切片会生成下列 SQL,由 PG 在运行期
+// 报语法错误而非空结果——与空串模糊定位守卫同层,必须显式拒绝:
+//
+//	doc @> ''::jsonb
 func ErrEmptyJSON(field FieldName) *Error {
 	return NewErr(KindWhere, string(field), "empty json: has must carry a non-empty JSON document", -1)
 }

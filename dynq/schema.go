@@ -62,7 +62,8 @@ type PaginationSchema struct {
 }
 
 // ResourceSchema 是前端契约出口:资源名、字段列表、默认排序、分页参数。
-// 前端拿到的即有效能力全集:被禁用字段根本不出现在 schema 中,
+// 前端拿到的即有效能力全集:被完全禁用的字段(或原 @internal)不出现在 schema
+// 中,部分禁用经减法投影后保留(op 集清空 / sortable=false 等),
 // QueryBuilder 无需感知"禁用"概念。
 type ResourceSchema struct {
 	Resource    string           `json:"resource"`

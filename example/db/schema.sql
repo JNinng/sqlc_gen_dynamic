@@ -1,7 +1,8 @@
 -- example 工程 DDL + 注释 DSL(单一事实源)。
--- users 表覆盖全部 dataType 与 DSL 形态;orders 表用于跨表游标指纹互斥验证;
--- customer 表演示 @scope 行级数据权限:守卫函数定义在本文件内(sqlc 可见),
--- 随迁移版本化,权限规则只在函数里写一次。
+-- users 表覆盖多数 dataType 与列级指令形态;@api / @scope / @update 等表级与
+-- 引用能力由 orders / customers / projects / sys_user / sys_resource_grant 演示
+-- (orders 表同时用于跨表游标指纹互斥验证);
+-- 守卫函数定义在本文件内(sqlc 可见),随迁移版本化,权限规则只在函数里写一次。
 
 CREATE TYPE user_status AS ENUM ('active', 'inactive', 'banned');
 CREATE TYPE order_status AS ENUM ('pending', 'paid', 'shipped', 'closed');

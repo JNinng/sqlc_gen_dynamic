@@ -38,7 +38,7 @@ $(WASM):
 	GOOS=wasip1 GOARCH=wasm $(GO) build -o $@ ./tools/sqlc_gen_dynamic
 
 # 发布资产以版本命名(GitHub Release 上传件,与 usage.md 锁定示例同名);
-# VERSION 缺省取最近 tag,打完 v0.2.0 tag 后执行即为正确版本名。
+# VERSION 缺省取最近 tag,打完新 tag 后执行即为正确版本名。
 release-wasm: $(WASM)
 	sha256sum $(WASM) > $(WASM).sha256
 	cat $(WASM).sha256

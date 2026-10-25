@@ -13,7 +13,7 @@ import (
 	pb "github.com/sqlc-dev/plugin-sdk-go/plugin"
 )
 
-// 生成物编译闸(U6/U9):golden 只做字节比较,不验证产物可编译;本文件把
+// 生成物编译闸:golden 只做字节比较,不验证产物可编译;本文件把
 // 生成源码写入临时包并执行 go build,用最小模型桩(DBTX / 模型结构体 /
 // 枚举类型)覆盖各分支:只读时间主键、datetime between、not_null、jsonb has、
 // 跨包 model_import。桩由 TableSpec 派生,与生成面自动同齐。
@@ -65,7 +65,7 @@ func TestGeneratedCodeCompiles(t *testing.T) {
 		}, false)
 	})
 
-	// 跨包 model_import(U9):全部入选表 + models 包限定引用,一并编译。
+	// 跨包 model_import:全部入选表 + models 包限定引用,一并编译。
 	// override 取 set-only 列(Set 签名引用 uuid.UUID,Set 值经 any 透传):
 	// 端到端验证"SetCapable → 收集 import 且被签名引用"。带读面值 op 的
 	// override 由生成期分叉检测拒绝(见 TestGoTypeOverrideDivergence)。

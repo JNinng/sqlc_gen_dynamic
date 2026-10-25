@@ -9,9 +9,9 @@ import (
 // gen_query.go:Cast / Parse / validate / where 段(cursor 取值 / List / Count /
 // Schema 段见 gen_exec.go)。
 
-// Cast 返回 seek 谓词与 where 等值比较需要的显式 cast 后缀。
-// 文本形态参数(string)与 uuid/enum/decimal 列比较、[]byte/[]int64 与 jsonb/
-// int_array 列比较均需显式 cast,不依赖预编译语句的参数类型推断。
+// Cast 返回 registry 记录的 seek 谓词 cast 后缀(uuid/enum/decimal 列的
+// 十进制字符串/文本形态参数需要,不依赖预编译语句的参数类型推断)。
+// where 构造的 cast 后缀见 whereCast(多覆盖 jsonb / int_array)。
 func (c *ColumnSpec) Cast() string {
 	switch c.DataType {
 	case "uuid":

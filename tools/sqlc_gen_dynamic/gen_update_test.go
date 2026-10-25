@@ -12,7 +12,7 @@ import (
 // @pk 自动定位、各 op 分支的 SQL 与守卫、@filter 绕过、执行函数与跨包
 // model_import。读面与 DSL 失败路径分别见 golden_test.go / dsl_test.go。
 
-// TestGeneratePkAutoLocator 覆盖 A4 的两条正向规则:
+// TestGeneratePkAutoLocator 覆盖两条正向规则:
 //  1. 有 @pk、只有 set-capable 列(无任何 where 声明)也能生成更新面——
 //     where 资格完全由 pk 自动矩阵满足;
 //  2. 显式 @updatable: auto 与裸形态等价(Set + Where),策略头回显裸形态。
@@ -553,7 +553,7 @@ func TestGenerateUpdateOpFamily(t *testing.T) {
 }
 
 // TestGenerateListHasEmptyJSONGuard 覆盖 typed 门 validate 段的空 jsonb
-// 守卫:直接构造 Params 传入空非 nil 切片时显式拒绝(U7)。
+// 守卫:直接构造 Params 传入空非 nil 切片时显式拒绝。
 func TestGenerateListHasEmptyJSONGuard(t *testing.T) {
 	req := loadGoldenRequest(t)
 	resp, err := Generate(context.Background(), req)
@@ -564,7 +564,7 @@ func TestGenerateListHasEmptyJSONGuard(t *testing.T) {
 	for _, want := range []string{
 		"if params.MetaHas != nil && len(params.MetaHas) == 0 {",
 		`return dynq.ErrEmptyJSON("meta")`,
-		// List 侧 where 同样左列 cast(U1)。
+		// List 侧 where 同样左列 cast。
 		`sq.Expr("(meta::jsonb) @> ?::jsonb", string(params.MetaHas))`,
 	} {
 		if !strings.Contains(s, want) {
@@ -573,7 +573,7 @@ func TestGenerateListHasEmptyJSONGuard(t *testing.T) {
 	}
 }
 
-// TestGenerateJSONColumnHas 覆盖 json(非 jsonb)列的 has(U1):PG 没有
+// TestGenerateJSONColumnHas 覆盖 json(非 jsonb)列的 has:PG 没有
 // json @> jsonb 运算符,List 与 Update 两侧都必须生成左列 cast 形态。
 func TestGenerateJSONColumnHas(t *testing.T) {
 	req := loadGoldenRequest(t)

@@ -94,7 +94,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "created_at", "创建时间 [@dynamic: is_null]") },
 			wantErr: "declared on NOT NULL column",
 		},
-		// ---- 枚举数组(U2/G2/G3):读能力面生成期拒绝,非法 SQL 不再流到运行期 ----
+		// ---- 枚举数组:读能力面生成期拒绝,非法 SQL 不再流到运行期 ----
 		{
 			name: "enum_array_dynamic_rejected",
 			mutate: func(r *pb.GenerateRequest) {
@@ -135,7 +135,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantSuccess: true,
 		},
 		{
-			// G3:策略驱动的拒绝分支——文案点名 default_ops 触发器并给出出路。
+			// 策略驱动的拒绝分支——文案点名 default_ops 触发器并给出出路。
 			name: "enum_array_default_ops_rejected",
 			mutate: func(r *pb.GenerateRequest) {
 				users := findTable(r, "users")
@@ -266,7 +266,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 			},
 			wantErr: "not found in schema",
 		},
-		// ---- default_ops 死配置(U4):无 @pk 入选表不再被静默忽略 ----
+		// ---- default_ops 死配置:无 @pk 入选表不再被静默忽略 ----
 		{
 			name: "default_ops_without_pk_rejected",
 			mutate: func(r *pb.GenerateRequest) {
@@ -835,7 +835,7 @@ func TestDeprecatedDirectiveAliases(t *testing.T) {
 	}
 }
 
-// TestGoTypeOverrideImportCollected 覆盖 U3:带 import 的 go_type_overrides
+// TestGoTypeOverrideImportCollected 覆盖:带 import 的 go_type_overrides
 // 必须把外部包收集进产物 import;且仅在生成面实际引用该列 GoType 时收集——
 // 收集面过宽会让 import 悬空(未使用 import 产物不可编译)。
 // 引用面取更新面 Set / Where 签名:读面值 op 与协议门收敛类型分叉会被
@@ -939,7 +939,7 @@ func TestGoTypeOverrideImportCollected(t *testing.T) {
 	})
 }
 
-// TestEnumArrayRejectedScope 覆盖 G2:枚举数组的能力面拒绝只作用于入选表——
+// TestEnumArrayRejectedScope:枚举数组的能力面拒绝只作用于入选表——
 // 被 options.tables 排除的表,其列声明与 default_ops 策略本不生效,不因此 fail。
 func TestEnumArrayRejectedScope(t *testing.T) {
 	poison := func(req *pb.GenerateRequest) {
@@ -989,7 +989,7 @@ func TestEnumArrayRejectedScope(t *testing.T) {
 	})
 }
 
-// TestOverrideModelImportPackageConflict 覆盖 G4:override 与 model_import
+// TestOverrideModelImportPackageConflict:override 与 model_import
 // 同包但 import/package 不一致时,生成期前置拒绝(否则错误落在产物编译期)。
 func TestOverrideModelImportPackageConflict(t *testing.T) {
 	base := `{
@@ -1320,7 +1320,7 @@ func TestGoTypeOverrideDivergence(t *testing.T) {
 
 	t.Run("no_pk_update_only_between_rejected", func(t *testing.T) {
 		// 无 @pk 纯更新面表不经 validateTable 主流程(提前返回):between 分叉
-		// 检测须在该分支同样生效(G1,更新面正是 between 的主要形态)。
+		// 检测须在该分支同样生效(更新面正是 between 的主要形态)。
 		req := loadGoldenRequest(t)
 		users := findTable(req, "users")
 		for _, c := range users.Columns {

@@ -118,7 +118,8 @@ func ErrEmptyPattern(field FieldName) *Error {
 }
 
 // ErrEmptyJSON 构造空 jsonb 定位值错误:空切片会生成下列 SQL,由 PG 在运行期
-// 报语法错误而非空结果——与空串模糊定位守卫同层,必须显式拒绝:
+// 报 invalid input syntax 错误而非返回空结果——与空串模糊定位守卫同层,
+// 必须显式拒绝:
 //
 //	doc @> ''::jsonb
 func ErrEmptyJSON(field FieldName) *Error {

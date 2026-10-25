@@ -170,7 +170,7 @@ var canonicalOpOrder = []string{
 }
 
 // matrixOps 返回 dataType 的类型有效 op 集(auto / where 形态与 @pk 自动
-// 定位使用):严格按 §4.2 能力矩阵,不追加 null op。
+// 定位使用):严格按 dsl.md §4.2 能力矩阵,不追加 null op。
 func matrixOps(dataType string) []string {
 	allowed := capabilityMatrix[dataType]
 	var out []string
@@ -183,7 +183,8 @@ func matrixOps(dataType string) []string {
 }
 
 // expandUpdatableItems 展开 @updatable 的显式清单。语义与 @dynamic 同构,
-// 但独立实现——expandDynamicItems 的 List 语义与报错文案是既存契约,不复用:
+// 但独立实现——expandDynamicItems 的输出顺序(声明序)与报错文案是读面
+// 既存契约,不复用:
 //   - 预设项与类型能力取交集,如 int_array 列声明 in 时 not_in 被裁剪;
 //   - 显式 op 严格校验:类型不支持 → 生成期 fail;
 //   - is_null/not_null 仅可空列、仅显式声明;

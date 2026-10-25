@@ -48,7 +48,7 @@ func (e *Error) At(kind string, index int, field string) *Error {
 	return &ne
 }
 
-// NewErr 构造带定位的错误。index < 0 时不填。
+// NewErr 构造带定位的错误。index < 0 表示不适用(负值按哨兵保留在 Index 中)。
 func NewErr(kind, field, reason string, index int) *Error {
 	return &Error{Kind: kind, Field: field, Reason: reason, Index: index}
 }

@@ -48,8 +48,9 @@ type ColumnSpec struct {
 	EnumGoType string // 同包模型枚举类型名(如 UserStatus);跨包时已含前缀
 	// EnumPhysical 是 PG 枚举类型名(如 user_status),用于占位符显式 cast。
 	EnumPhysical string
-	// OverrideImport 是命中的 go_type_overrides 声明(nil = 未命中或无 import),
-	// 供 importsSection 收集产物 import(空路径声明会被静默跳过,产物不可编译)。
+	// OverrideImport 是命中的 go_type_overrides 声明(nil = 未命中或无 import;
+	// 无 import 的 type_name 形态不记录,importsSection 只发射带路径的 import,
+	// 避免空路径 import 进产物),供 importsSection 收集产物 import。
 	OverrideImport *GoTypeOverride
 	// OverrideDivergent 报告 override 类型与默认映射(即协议门收敛)类型不一致:
 	// 读面值 op 的 Params 槽位与时间型 between 的边界比较会生成与 override
@@ -283,7 +284,7 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		c.GoType = goType
 
 		// @dynamic:显式声明或 default_ops 策略(读面;与 Update 完全独立)。
-		// 枚举数组的能力面拒绝在 validateTable(G2:检查只作用于入选表)。
+		// 枚举数组的能力面拒绝在 validateTable(检查只作用于入选表)。
 		if hasDyn {
 			hasDynamicDecl = true
 			ops, err := expandDynamicItems(colWhere, dataType, dynTag.Payload, c.Nullable)
@@ -590,7 +591,8 @@ func qualify(name string, opts *Options) string {
 	return name
 }
 
-// validateTable 表级校验:camel 冲突、@pk、@default_sort、sortable 类型限制。
+// validateTable 表级校验:camel 冲突、@pk、@default_sort、sortable 类型限制、
+// @scope / @filter 目标存在性、枚举数组能力面、override 与更新面 between 分叉等。
 func validateTable(spec *TableSpec) error {
 	// camel 折叠冲突。
 	seen := map[string]string{} // key → physical
@@ -609,7 +611,7 @@ func validateTable(spec *TableSpec) error {
 			return errMissingPK(spec.Name)
 		}
 		// 更新面 between 的分叉检测与常规表共用:边界比较的发射不依赖读面,
-		// 无 @pk 纯更新面表正是 between 的主要使用形态(G1)。
+		// 无 @pk 纯更新面表正是 between 的主要使用形态。
 		if err := updateBetweenDivergenceError(spec); err != nil {
 			return err
 		}
@@ -703,7 +705,7 @@ func validateTable(spec *TableSpec) error {
 	// 枚举数组:读能力面不支持——按标量枚举展开会生成 enum[] 与 enum 的非法
 	// 比较 SQL,游标取值同样无法编译;仅纯投影放行。写面已在 resolveType 的
 	// 枚举分支拒绝非 false 的 @updatable。检查置于入选表集:未入选表的列
-	// 声明与 default_ops 策略本不生效,不因此 fail(G2)。
+	// 声明与 default_ops 策略本不生效,不因此 fail。
 	for i := range spec.Columns {
 		c := &spec.Columns[i]
 		if c.DataType != "enum" || !c.IsArray {
@@ -784,7 +786,7 @@ func validateFilterTargets(spec *TableSpec) error {
 // 按 dataType 发射(数值为 lo > hi,时间型为 lo.After(hi) 方法调用),override
 // 类型不保证可比较/携带 After 方法,一律不可编译;pk 自动定位矩阵同样发射。
 // 无 @pk 纯更新面表不经 validateTable 主流程(提前返回),由该分支单独调用
-// 本检测(G1:分叉故障类不因表形态而豁免)。
+// 本检测:分叉故障类不因表形态而豁免。
 func updateBetweenDivergenceError(spec *TableSpec) error {
 	if !spec.UpdateEnabled {
 		return nil

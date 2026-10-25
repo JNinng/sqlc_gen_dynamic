@@ -55,7 +55,7 @@ type Pagination struct {
 	IncludeTotal *bool   `json:"includeTotal"`
 }
 
-// IncludeTotalOf 返回 include_total 的有效值:缺省/nil = true。
+// IncludeTotalOf 返回 includeTotal 的有效值:缺省/nil = true。
 // 该字段属 handler 层消费,不进入 Params 与查询引擎。
 func IncludeTotalOf(p *Pagination) bool {
 	if p == nil || p.IncludeTotal == nil {

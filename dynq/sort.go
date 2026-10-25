@@ -20,7 +20,8 @@ type SortField struct {
 }
 
 // ResolveSort 解析有效排序(查询函数内统一执行):
-//  1. 用户指定排序 → 逐项校验字段在 registry 中、已声明 @sortable、未被 opts 禁用。
+//  1. 用户指定排序 → 逐项过白名单校验:字段在 registry 中、非 @internal、
+//     已声明 @sortable、未被 opts 禁用。
 //  2. 未指定 → 回落表级 @default_sort;回落不受 opts 禁用影响——default_sort 是
 //     生成期表级不变量,DisableSort 只收窄调用点的显式排序能力,与 @filter 不受
 //     DisableWhere 影响同构(取舍见 dsl.md §3.3)。
@@ -77,7 +78,8 @@ func OrderBySQL(seq []SortField) string {
 
 // CursorFingerprint 计算排序指纹(FNV-64 哈希),输入为资源名与有效排序各列的
 // 逻辑列名和方向。掺入资源名,使跨表同规格排序(如两张表都是 created_at DESC、
-// id DESC)的游标互不通用;换排序、跨表、跨能力视图复用旧游标 → 指纹不符报错。
+// id DESC)的游标互不通用;换排序、跨表复用旧游标 → 指纹不符报错。指纹只含
+// 资源名与有效排序——能力视图差异(opts 禁用)仅在其改变有效排序时才被拦截。
 // 指纹不含 page_size,调整每页条数不影响游标。
 func CursorFingerprint(resource string, seq []SortField) uint64 {
 	var b strings.Builder

@@ -9,7 +9,7 @@ import "strings"
 func Placeholders(n int) string { return placeholders(n, "") }
 
 // PlaceholdersCast 生成 n 个带显式 cast 后缀的占位符(如 "?::uuid"),用于
-// 文本参数与 uuid/enum/jsonb/int_array 列的跨类型比较(显式 cast 不依赖
+// in / not_in 展开中 uuid/enum/decimal 列的跨类型比较(显式 cast 不依赖
 // 预编译语句的参数类型推断,任何执行模式下语义一致)。
 func PlaceholdersCast(n int, cast string) string { return placeholders(n, cast) }
 

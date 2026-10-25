@@ -3,12 +3,14 @@ package dynq
 import (
 	"encoding/base64"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestCursorRoundtrip(t *testing.T) {
@@ -139,6 +141,138 @@ func TestCursorRoundtrip(t *testing.T) {
 		})
 	}
 	_ = fp
+}
+
+// hugeInt 构造超出 int64 的十进制整数(测试辅助)。
+func hugeInt(t *testing.T, decimal string) *big.Int {
+	t.Helper()
+	n, ok := new(big.Int).SetString(decimal, 10)
+	if !ok {
+		t.Fatalf("bad big int literal %q", decimal)
+	}
+	return n
+}
+
+// TestCursorNumericEncoding 覆盖 numeric 列的游标编码:有限值保留标度的十进制
+// 字符串(Int × 10^Exp,含超 float64 精度与标度差异形态),NaN/±Inf 复用 number
+// 哨兵,NULL 编码为 JSON null;解码按 DataTypeDecimal 保留字符串。
+func TestCursorNumericEncoding(t *testing.T) {
+	cases := []struct {
+		name string
+		n    pgtype.Numeric
+		want any // 解码后的游标列值
+	}{
+		{"finite", pgtype.Numeric{Int: big.NewInt(15), Exp: -1, Valid: true}, "1.5"},
+		{"scale preserved", pgtype.Numeric{Int: big.NewInt(150), Exp: -2, Valid: true}, "1.50"},
+		{"negative", pgtype.Numeric{Int: big.NewInt(-125), Exp: -2, Valid: true}, "-1.25"},
+		{"positive exponent", pgtype.Numeric{Int: big.NewInt(15), Exp: 2, Valid: true}, "1500"},
+		{"zero exponent", pgtype.Numeric{Int: big.NewInt(42), Exp: 0, Valid: true}, "42"},
+		{"leading fraction", pgtype.Numeric{Int: big.NewInt(123), Exp: -6, Valid: true}, "0.000123"},
+		{"pgx zero (nil int)", pgtype.Numeric{Valid: true}, "0"},
+		{"zero with scale", pgtype.Numeric{Int: big.NewInt(0), Exp: -2, Valid: true}, "0.00"},
+		{"beyond float64 precision", pgtype.Numeric{Int: hugeInt(t, "1234567890123456789012345678901234567890"), Exp: -10, Valid: true}, "123456789012345678901234567890.1234567890"},
+		{"negative beyond float64 precision", pgtype.Numeric{Int: hugeInt(t, "-98765432109876543210987654321098765432109"), Exp: -10, Valid: true}, "-9876543210987654321098765432109.8765432109"},
+		{"NaN", pgtype.Numeric{NaN: true, Valid: true}, sentinelNaN},
+		{"+Inf", pgtype.Numeric{InfinityModifier: pgtype.Infinity, Valid: true}, sentinelPosInf},
+		{"-Inf", pgtype.Numeric{InfinityModifier: pgtype.NegativeInfinity, Valid: true}, sentinelNegInf},
+		{"NULL", pgtype.Numeric{Valid: false}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			single := []SortField{{Key: "b", Column: "balance", DataType: DataTypeDecimal, Nullable: true}}
+			cur, err := EncodeCursor(CursorFingerprint("t", single), single, []any{tc.n})
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			vals, err := DecodeCursor(cur, CursorFingerprint("t", single), single)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if want, ok := tc.want.(string); ok {
+				if got := vals[0].(string); got != want {
+					t.Fatalf("value:\n got %q\nwant %q", got, want)
+				}
+			} else if vals[0] != nil {
+				t.Fatalf("want nil, got %#v", vals[0])
+			}
+		})
+	}
+}
+
+// TestCursorNumericPointerEncoding 覆盖 *pgtype.Numeric(go_type_overrides 或
+// 驱动形态差异)与 nil 指针的编码路径。
+func TestCursorNumericPointerEncoding(t *testing.T) {
+	single := []SortField{{Key: "b", Column: "balance", DataType: DataTypeDecimal, Nullable: true}}
+	n := pgtype.Numeric{Int: big.NewInt(15), Exp: -1, Valid: true}
+	cur, err := EncodeCursor(CursorFingerprint("t", single), single, []any{&n})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vals, err := DecodeCursor(cur, CursorFingerprint("t", single), single)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := vals[0].(string); got != "1.5" {
+		t.Fatalf("pointer numeric: got %q", got)
+	}
+
+	cur, err = EncodeCursor(CursorFingerprint("t", single), single, []any{(*pgtype.Numeric)(nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vals, err = DecodeCursor(cur, CursorFingerprint("t", single), single); err != nil {
+		t.Fatal(err)
+	}
+	if vals[0] != nil {
+		t.Fatalf("nil pointer must encode to null, got %#v", vals[0])
+	}
+}
+
+// TestCursorDecimalDecodeStrict 覆盖 decimal 解码的严格性:游标值只能出自
+// EncodeCursor 的字符串形态,JSON number / 非法字面量 / 指数形态一律拒绝;
+// 合法字面量(含哨兵)原样透传,标度差异由服务端 numeric 等值判定吸收。
+func TestCursorDecimalDecodeStrict(t *testing.T) {
+	single := []SortField{{Key: "b", Column: "balance", DataType: DataTypeDecimal, Nullable: true}}
+	fp := CursorFingerprint("u", single)
+	rawCursor := func(v string) string {
+		raw := `{"f":"` + strconv.FormatUint(fp, 10) + `","v":[` + v + `]}`
+		return base64.RawURLEncoding.EncodeToString([]byte(raw))
+	}
+
+	// 拒绝路径:Kind 恒为 cursor,Reason 区分"形态不符"与"字面量非法";
+	// 逐 payload 独立报告,不因首个失败中止余下用例。
+	for _, tc := range []struct{ payload, reason string }{
+		{`1.5`, "expected decimal string"}, // JSON number 形态
+		{`true`, "expected decimal string"},
+		{`"abc"`, "invalid decimal"},
+		{`"1e10"`, "invalid decimal"}, // 指数形态编码器不产出
+		{`""`, "invalid decimal"},
+		{`"1.5.0"`, "invalid decimal"},
+	} {
+		_, err := DecodeCursor(rawCursor(tc.payload), fp, single)
+		if err == nil {
+			t.Errorf("decimal decode must reject payload %s", tc.payload)
+			continue
+		}
+		if e := AsError(err); e.Kind != KindCursor || !strings.Contains(e.Reason, tc.reason) {
+			t.Errorf("payload %s: kind/reason = %+v, want kind=cursor reason~%q", tc.payload, e, tc.reason)
+		}
+	}
+	for _, tc := range []struct{ payload, want string }{
+		{`"1.50"`, "1.50"},
+		{`"-0.00"`, "-0.00"},
+		{`"NaN"`, sentinelNaN},
+		{`"Infinity"`, sentinelPosInf},
+		{`"-Infinity"`, sentinelNegInf},
+	} {
+		vals, err := DecodeCursor(rawCursor(tc.payload), fp, single)
+		if err != nil {
+			t.Fatalf("decode %s: %v", tc.payload, err)
+		}
+		if got := vals[0].(string); got != tc.want {
+			t.Fatalf("decode %s:\n got %q\nwant %q", tc.payload, got, tc.want)
+		}
+	}
 }
 
 func TestCursorDateEncoding(t *testing.T) {

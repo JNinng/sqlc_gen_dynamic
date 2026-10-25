@@ -87,6 +87,50 @@ func AsFloat64(v any) (float64, error) {
 	}
 }
 
+// AsDecimal 收敛 decimal(decimal 游标值):只收字符串——EncodeCursor 产出的
+// 规范十进制字面量或 NaN/±Infinity 哨兵——原样透传,精度不在 Go 侧解释,
+// 由 seek 占位符的 ?::numeric cast 交服务端精确解析。不收 JSON number:
+// 游标值只能出自 EncodeCursor,数字形态必然意味着篡改或精度已损(float64
+// 无法无损承载 NUMERIC(40,10) 量级的值)。
+func AsDecimal(v any) (string, error) {
+	s, ok := v.(string)
+	if !ok {
+		return "", coerceErr("expected decimal string, got %s", typeOf(v))
+	}
+	if !isDecimalLiteral(s) {
+		return "", coerceErr("invalid decimal: %q", s)
+	}
+	return s, nil
+}
+
+// isDecimalLiteral 校验编码器产出的字面量形态:可选符号 + 数字与至多一个小数点
+// (不收指数形态——编码器只产出十进制展开,指数形态只能来自契约外输入)。
+func isDecimalLiteral(s string) bool {
+	switch s {
+	case sentinelNaN, sentinelPosInf, sentinelNegInf:
+		return true
+	}
+	i := 0
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	digits, dots := 0, 0
+	for ; i < len(s); i++ {
+		switch c := s[i]; {
+		case c >= '0' && c <= '9':
+			digits++
+		case c == '.':
+			dots++
+			if dots > 1 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return digits > 0
+}
+
 // AsString 收敛字符串。
 func AsString(v any) (string, error) {
 	if v == nil {

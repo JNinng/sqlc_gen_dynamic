@@ -202,7 +202,7 @@ type User struct {
 	Age *int32 `db:"age" json:"age"`
 	// 评分 [0-100] [@dynamic: range @sortable @hideable @updatable: set]
 	Score *float64 `db:"score" json:"score"`
-	// 余额 [元] [@dynamic: range @hideable @updatable: set]
+	// 余额 [元] [@dynamic: range @sortable @hideable @updatable: set]
 	Balance pgtype.Numeric `db:"balance" json:"balance"`
 	// 生日 [@dynamic: eq, range @hideable @updatable: false]
 	BirthDate pgtype.Date `db:"birth_date" json:"birth_date"`

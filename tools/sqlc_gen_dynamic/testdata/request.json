@@ -129,7 +129,7 @@
               },
               {
                 "name": "balance",
-                "comment": "余额 [元] [@dynamic: range @hideable @updatable: set]",
+                "comment": "余额 [元] [@dynamic: range @sortable @hideable @updatable: set]",
                 "length": -1,
                 "table": {
                   "name": "users"

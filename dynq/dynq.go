@@ -14,6 +14,7 @@ type DataType string
 const (
 	DataTypeInteger  DataType = "integer"
 	DataTypeNumber   DataType = "number"
+	DataTypeDecimal  DataType = "decimal"
 	DataTypeDatetime DataType = "datetime"
 	DataTypeDate     DataType = "date"
 	DataTypeString   DataType = "string"
@@ -82,7 +83,7 @@ type FieldMeta struct {
 	Hidden     bool // @internal 全能力排除(旧名 @hidden 已弃用)
 	Enum       []string
 	// Cast 是 seek 谓词占位符的显式 cast 后缀(如 "::uuid"),用于文本形态参数
-	// 与 uuid/enum 列的空值安全等值比较;空 = 无需 cast。
+	// (uuid/enum/decimal 列)与列的空值安全比较;空 = 无需 cast。
 	Cast string
 	// API 非 nil 时,该字段 where 值控件的选项数据源为远程接口(@api 声明)。
 	// 仅影响前端 schema 输出(选项值动态获取),不参与任何服务端校验路径。

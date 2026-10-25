@@ -269,6 +269,7 @@ func (tc *tableCode) importsSection() (string, error) {
 
 var dataTypeConst = map[string]string{
 	"integer": "dynq.DataTypeInteger", "number": "dynq.DataTypeNumber",
+	"decimal":  "dynq.DataTypeDecimal",
 	"datetime": "dynq.DataTypeDatetime", "date": "dynq.DataTypeDate",
 	"string": "dynq.DataTypeString", "boolean": "dynq.DataTypeBoolean",
 	"uuid": "dynq.DataTypeUUID", "enum": "dynq.DataTypeEnum",
@@ -296,7 +297,7 @@ func (tc *tableCode) registrySection() string {
 	for _, c := range spec.Columns {
 		b.WriteString("\t\t{\n")
 		fmt.Fprintf(&b, "\t\t\tKey:        %q,\n", c.Key)
-			fmt.Fprintf(&b, "\t\t\tColumn:     %q,\n", c.SQLName)
+		fmt.Fprintf(&b, "\t\t\tColumn:     %q,\n", c.SQLName)
 		fmt.Fprintf(&b, "\t\t\tLabel:      %q,\n", c.Label)
 		fmt.Fprintf(&b, "\t\t\tDataType:   %s,\n", dataTypeOrRaw(c.DataType))
 		fmt.Fprintf(&b, "\t\t\tNullable:   %v,\n", c.Nullable)
@@ -555,7 +556,7 @@ func (tc *tableCode) coerceCall(c *ColumnSpec, valueExpr string, right bool) (ca
 	switch c.DataType {
 	case "integer":
 		return "dynq.AsInt64(" + src + ")", "v"
-	case "number":
+	case "number", "decimal":
 		return "dynq.AsFloat64(" + src + ")", "v"
 	case "datetime":
 		return "dynq.AsTime(" + src + ")", "v"
@@ -582,7 +583,7 @@ func (tc *tableCode) coerceSliceCall(c *ColumnSpec) string {
 	switch c.DataType {
 	case "integer", "int_array":
 		return "dynq.AsInt64Slice(c.Value)"
-	case "number":
+	case "number", "decimal":
 		return "dynq.AsFloat64Slice(c.Value)"
 	case "datetime":
 		return "dynq.AsTimeSlice(c.Value)"

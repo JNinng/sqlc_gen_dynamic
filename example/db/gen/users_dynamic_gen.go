@@ -14,7 +14,7 @@
 //	column users.role: [@dynamic: contains, prefix, suffix @sortable @updatable: eq, neq]
 //	column users.age: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @hideable @updatable: eq, gt, gte, lt, lte, between]
 //	column users.score: [@dynamic: gt, gte, lt, lte, between @sortable @hideable @updatable: set]
-//	column users.balance: [@dynamic: gt, gte, lt, lte, between @hideable @updatable: set]
+//	column users.balance: [@dynamic: gt, gte, lt, lte, between @sortable @hideable @updatable: set]
 //	column users.birth_date: [@dynamic: eq, gt, gte, lt, lte, between @hideable @updatable: false]
 //	column users.org_id: [@dynamic: eq, neq, in, not_in @updatable: where]
 //	column users.tags: [@dynamic: in @hideable @updatable]
@@ -135,12 +135,13 @@ var usersRegistry = dynq.TableMeta{
 			Key:        "balance",
 			Column:     "balance",
 			Label:      "余额 [元]",
-			DataType:   dynq.DataTypeNumber,
+			DataType:   dynq.DataTypeDecimal,
 			Nullable:   true,
 			Ops:        []dynq.Op{dynq.OpGt, dynq.OpGte, dynq.OpLt, dynq.OpLte, dynq.OpBetween},
-			Sortable:   false,
+			Sortable:   true,
 			Selectable: true,
 			Hidden:     false,
+			Cast:       "::numeric",
 		},
 		{
 			Key:        "birthDate",
@@ -1520,6 +1521,8 @@ func usersCursorValues(row User, seq []dynq.SortField) []any {
 			vals[i] = row.Age
 		case "score":
 			vals[i] = row.Score
+		case "balance":
+			vals[i] = row.Balance
 		case "createdAt":
 			vals[i] = row.CreatedAt
 		case "updatedAt":

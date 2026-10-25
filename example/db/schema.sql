@@ -33,7 +33,7 @@ COMMENT ON COLUMN users.status     IS '状态 [已废弃，仅展示] [@dynamic:
 COMMENT ON COLUMN users.role       IS '角色 [@dynamic: fuzzy @sortable @updatable: exact]';
 COMMENT ON COLUMN users.age        IS '年龄 [@dynamic: exact, in, range @sortable @hideable @updatable: eq, range]';
 COMMENT ON COLUMN users.score      IS '评分 [0-100] [@dynamic: range @sortable @hideable @updatable: set]';
-COMMENT ON COLUMN users.balance    IS '余额 [元] [@dynamic: range @hideable @updatable: set]';
+COMMENT ON COLUMN users.balance    IS '余额 [元] [@dynamic: range @sortable @hideable @updatable: set]';
 COMMENT ON COLUMN users.birth_date IS '生日 [@dynamic: eq, range @hideable @updatable: false]';
 COMMENT ON COLUMN users.org_id     IS '组织ID [@dynamic: exact, in @updatable: where]';
 COMMENT ON COLUMN users.tags       IS '标签 [@dynamic: in @hideable @updatable]';

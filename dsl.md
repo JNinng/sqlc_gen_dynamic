@@ -140,7 +140,7 @@ COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range 
 
 声明该列可参与 ORDER BY。
 
-- 类型限制:`numeric` 列(pgtype.Numeric 无法编码游标值)、`int_array` 列(数组 seek 谓词无法参数化)、`unmapped` 列不可声明 → 生成期 fail;
+- 类型限制:`int_array` 列(数组 seek 谓词无法参数化)、`unmapped` 列不可声明 → 生成期 fail;`numeric` 列支持排序——游标值以保留标度的十进制字符串编码,seek 占位符发射 `?::numeric`,比较在服务端以 numeric 精确进行;
 - 与 `@default_sort` 联动:表级 `@default_sort` 目标列必须已声明 `@sortable`;
 - 与 `@internal` 互斥(组合 → fail)。
 
@@ -512,7 +512,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | PG 类型                                                                                                   | dataType    | Go 类型                                    |
 | ------------------------------------------------------------------------------------------------------- | ----------- | ---------------------------------------- |
 | `int2` / `int4` / `int8` / `smallint` / `integer` / `bigint` / `serial` / `bigserial` / `smallserial` 等 | `integer`   | `int64`                                  |
-| `numeric`                                                                                               | `number`    | `float64`(参数 `?::numeric` 显式 cast)       |
+| `numeric`                                                                                               | `decimal`   | `float64`(where 参数 `?::numeric` 显式 cast;游标值以十进制字符串编解码,seek 占位符 `?::numeric`) |
 | `float4` / `float8` / `real` / `double precision`                                                       | `number`    | `float64`                                |
 | `timestamptz` / `timestamp`(with / without time zone)                                                   | `datetime`  | `time.Time`                              |
 | `date`                                                                                                  | `date`      | `time.Time`                              |
@@ -528,7 +528,9 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 
 **`unmapped`** **列**:不可映射类型且未声明 `@dynamic` / `@sortable` / 非 false `@updatable` 的列按纯展示列放行(可写进 `fields` 被返回,但不出现在 schema 的 `ops` / `sortable` 中)。声明了过滤 / 排序 / 写入能力但类型不可映射 → 生成期 fail;`@updatable: false` 是惰性声明,不要求类型可映射。
 
-**`@sortable`** **的类型限制**:`numeric`(无法编码游标值)、`int_array`(无法参数化 seek 谓词)、枚举数组(标量形态的游标取值与 seek 均不成立)与 `unmapped` 不可声明 `@sortable` → 生成期 fail。
+**`decimal`** **与** **`number`** **的分野在游标**:where 面两型同为 `float64` 参数(decimal 另加 `?::numeric` cast);游标面 decimal 的列值为 `pgtype.Numeric`,编码为保留标度的十进制字符串(`Int × 10^Exp`,NaN/±Infinity 为字符串哨兵,精度无损),seek 比较在服务端以 numeric 精确进行——`1.5` 与 `1.50` 编码串不同但等值判定等价。`number`(float4/float8)按 float64 收敛,不承诺十进制精度。
+
+**`@sortable`** **的类型限制**:`int_array`(无法参数化 seek 谓词)、枚举数组(标量形态的游标取值与 seek 均不成立)与 `unmapped` 不可声明 `@sortable` → 生成期 fail。
 
 ### 4.2 能力矩阵(dataType × 默认可用 op)
 
@@ -538,6 +540,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | ----------- | -------------------------------------------------------- |
 | `integer`   | `eq` `neq` `in` `not_in` `gt` `gte` `lt` `lte` `between` |
 | `number`    | `eq` `neq` `in` `not_in` `gt` `gte` `lt` `lte` `between` |
+| `decimal`   | `eq` `neq` `in` `not_in` `gt` `gte` `lt` `lte` `between` |
 | `datetime`  | `eq` `neq` `in` `not_in` `gt` `gte` `lt` `lte` `between` |
 | `date`      | `eq` `neq` `in` `not_in` `gt` `gte` `lt` `lte` `between` |
 | `string`    | `eq` `neq` `in` `not_in` `contains` `prefix` `suffix`    |
@@ -567,9 +570,9 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 
 | op                               | SQL 语义                                                                 | 适用 dataType                                                  |
 | -------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `eq` / `neq`                     | `=` / `<>`                                                             | integer, number, datetime, date, string, boolean, uuid, enum |
-| `gt` / `gte` / `lt` / `lte`      | 对应比较运算符                                                                | integer, number, datetime, date                              |
-| `between`                        | `>= AND <=`(含两端,value=左端、rightValue=右端)                                | integer, number, datetime, date                              |
+| `eq` / `neq`                     | `=` / `<>`                                                             | integer, number, decimal, datetime, date, string, boolean, uuid, enum |
+| `gt` / `gte` / `lt` / `lte`      | 对应比较运算符                                                                | integer, number, decimal, datetime, date                              |
+| `between`                        | `>= AND <=`(含两端,value=左端、rightValue=右端)                                | integer, number, decimal, datetime, date                              |
 | `in` / `not_in`                  | `IN` / `NOT IN`(展开占位符,1 ≤ len ≤ MaxIn)                                 | 除 jsonb 外全部(int\_array 列 `in` 语义为 `&&` 重叠)                   |
 | `contains` / `prefix` / `suffix` | `ILIKE '%v%'` / `'v%'` / `'%v'`(value 中 `%` `_` `\` 全量转义,通配符位置由 op 决定) | string                                                       |
 | `is_null` / `not_null`           | `IS NULL` / `IS NOT NULL`(禁止携带 value)                                  | 任意,仅可空列且显式声明                                                 |
@@ -651,7 +654,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | `@dynamic` 显式 op 项类型不支持(如对 `bool` 声明 `range`)                      | 生成期 fail                                                      |
 | `@dynamic` 显式 op 项为 `is_null` / `not_null` 且列非空                    | 生成期 fail                                                      |
 | `@dynamic` 展开后无任何 op 命中                                            | 生成期 fail                                                      |
-| `@sortable` 声明在 `numeric` / `int_array` / `unmapped` 列             | 生成期 fail                                                      |
+| `@sortable` 声明在 `int_array` / `unmapped` 列                       | 生成期 fail                                                      |
 | `@api` 类型非 `integer` / `uuid` / `string`                           | 生成期 fail                                                      |
 | `@api` 缺 `value_key` / `label_key` 或含未知参数或 `endpoint` 含 `?`        | 生成期 fail                                                      |
 | `@api` 与 `@internal` 组合                                            | 生成期 fail                                                      |

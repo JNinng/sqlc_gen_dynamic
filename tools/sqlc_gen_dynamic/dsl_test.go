@@ -198,9 +198,20 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: "fold to the same camelCase key",
 		},
 		{
-			name:    "sortable_numeric",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "balance", "余额 [@sortable]") },
-			wantErr: "@sortable not supported for numeric",
+			// sortable 类型限制(int_array):数组 seek 谓词无法参数化。
+			name:    "sortable_int_array",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "tags", "标签 [@sortable]") },
+			wantErr: "@sortable not supported for int_array columns",
+		},
+		{
+			// sortable 类型限制(unmapped):不可映射类型在 resolveType 先行拒绝,
+			// validateTable 的 unmapped 分支为防御,不可经声明 @sortable 直达。
+			name: "sortable_unmapped_type",
+			mutate: func(r *pb.GenerateRequest) {
+				addColumn(r, "users", "extras", "inet", false)
+				setComment(r, "users", "extras", "扩展 [@sortable]")
+			},
+			wantErr: "is not supported for dynamic columns",
 		},
 		{
 			name:    "tag_with_payload",

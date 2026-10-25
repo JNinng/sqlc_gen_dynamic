@@ -24,7 +24,7 @@
 |---|---|---|
 | `field` | string | 逻辑字段名(camelCase) |
 | `label` | string | 展示文本(注释非指令部分) |
-| `dataType` | string(枚举) | `integer` / `number` / `datetime` / `date` / `string` / `boolean` / `uuid` / `enum` / `jsonb` / `int_array` |
+| `dataType` | string(枚举) | `integer` / `number` / `decimal` / `datetime` / `date` / `string` / `boolean` / `uuid` / `enum` / `jsonb` / `int_array`(`decimal` 为 `numeric` 列) |
 | `nullable` | boolean | 列可空性 |
 | `sortable` | boolean | 可排序 → 表格列头可挂排序 |
 | `hideable` | boolean | 纯 UI 提示:列头渲染与显隐交互(见 `@hideable`,DSL 旧名 `@selectable`) |
@@ -55,7 +55,7 @@
 | dataType | 控件族 | 说明 |
 |---|---|---|
 | string / uuid | 输入框 | uuid 前端格式预校验由 `dataType` 提示 |
-| integer / number | 数字输入 | |
+| integer / number / decimal | 数字输入 | decimal 为 `numeric` 列,渲染与 number 同族 |
 | datetime / date | 时间 / 日期选择 | |
 | enum | 下拉选择 | 单选 / 多选形态由所选 op 决定,options = `fields[].enum` |
 | boolean | 布尔选择 | |

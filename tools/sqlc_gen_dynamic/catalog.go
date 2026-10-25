@@ -48,7 +48,6 @@ type ColumnSpec struct {
 	EnumGoType string // 同包模型枚举类型名(如 UserStatus);跨包时已含前缀
 	// EnumPhysical 是 PG 枚举类型名(如 user_status),用于占位符显式 cast。
 	EnumPhysical string
-	NumericCast  bool
 	// OverrideImport 是命中的 go_type_overrides 声明(nil = 未命中或无 import),
 	// 供 importsSection 收集产物 import(空路径声明会被静默跳过,产物不可编译)。
 	OverrideImport *GoTypeOverride
@@ -557,7 +556,6 @@ func resolveType(colWhere, tableName string, col *pb.Column, enums map[string][]
 		}
 		return "unmapped", "", nil
 	}
-	c.NumericCast = m.numericCast
 	defaultGoType = m.goType
 	if goType == "" {
 		goType = m.goType
@@ -728,16 +726,14 @@ func validateTable(spec *TableSpec) error {
 		return err
 	}
 
-	// sortable 列的类型限制:numeric(pgtype.Numeric 无法编码游标值)与
-	// int_array(数组 seek 谓词无法参数化)不可排序。float4/smallint 放行:
+	// sortable 列的类型限制:int_array(数组 seek 谓词无法参数化)与 unmapped
+	// 不可排序。numeric 可排序:游标值编码为十进制字符串,seek 占位符发射
+	// ?::numeric,比较在服务端以 numeric 精确进行。float4/smallint 放行:
 	// 其模型字段(float32/int16)由 dynq 游标编码分支覆盖,seek 参数按
 	// number/integer 收敛为 float64/int64,PG 跨类型比较不损索引。
 	for _, c := range spec.Columns {
 		if !c.Sortable {
 			continue
-		}
-		if c.NumericCast {
-			return fmt.Errorf("column %s.%s: @sortable not supported for numeric columns (use a float8 column or drop @sortable)", spec.Name, c.Physical)
 		}
 		if c.DataType == "int_array" {
 			return fmt.Errorf("column %s.%s: @sortable not supported for int_array columns", spec.Name, c.Physical)

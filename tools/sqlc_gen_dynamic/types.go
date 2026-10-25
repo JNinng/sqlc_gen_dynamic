@@ -16,8 +16,6 @@ import (
 type mappedDataType struct {
 	dataType string // dynq.DataType 值
 	goType   string // Params Go 类型
-	// numericCast:PG numeric 列的参数需显式 ?::numeric(float8 → numeric 无隐式比较)。
-	numericCast bool
 }
 
 func mapPGType(col *pb.Column) (mappedDataType, error) {
@@ -34,7 +32,10 @@ func mapPGType(col *pb.Column) (mappedDataType, error) {
 		"serial", "bigserial", "smallserial", "serial2", "serial4", "serial8":
 		return mappedDataType{dataType: "integer", goType: "int64"}, nil
 	case "numeric":
-		return mappedDataType{dataType: "number", goType: "float64", numericCast: true}, nil
+		// decimal 与 number 的分野在游标:numeric 列值(pgtype.Numeric)以
+		// 十进制字符串编码/解码,参数走 ?::numeric 精确比较;float4/float8
+		// 以 float64 收敛。where 面两者同为 float64 参数。
+		return mappedDataType{dataType: "decimal", goType: "float64"}, nil
 	case "float4", "float8", "real", "double precision":
 		return mappedDataType{dataType: "number", goType: "float64"}, nil
 	case "timestamptz", "timestamp with time zone":
@@ -63,10 +64,12 @@ func displayName(t *pb.Identifier) string {
 	return t.Name
 }
 
-// capabilityMatrix:dataType × 默认可用 op(§7.2)。
+// capabilityMatrix:dataType × 默认可用 op(§7.2)。decimal 与 number 同矩阵:
+// 两型的能力差异只在游标编码与参数 cast,不在 op 面。
 var capabilityMatrix = map[string]map[string]bool{
 	"integer":  opsSet("eq", "neq", "in", "not_in", "gt", "gte", "lt", "lte", "between"),
 	"number":   opsSet("eq", "neq", "in", "not_in", "gt", "gte", "lt", "lte", "between"),
+	"decimal":  opsSet("eq", "neq", "in", "not_in", "gt", "gte", "lt", "lte", "between"),
 	"datetime": opsSet("eq", "neq", "in", "not_in", "gt", "gte", "lt", "lte", "between"),
 	"date":     opsSet("eq", "neq", "in", "not_in", "gt", "gte", "lt", "lte", "between"),
 	"string":   opsSet("eq", "neq", "in", "not_in", "contains", "prefix", "suffix"),

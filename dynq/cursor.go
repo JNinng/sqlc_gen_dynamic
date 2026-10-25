@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,7 +45,8 @@ type cursorPayload struct {
 
 // EncodeCursor 编码不透明游标:base64url(JSON{f, v})。
 // 列值按有效排序的 dataType 格式化:datetime 为 RFC3339、date 为 YYYY-MM-DD、
-// number 的 NaN/±Inf 为字符串哨兵、其余原生 JSON;NULL(指针 nil)为 JSON null。
+// number 的 NaN/±Inf 为字符串哨兵、decimal 为十进制字符串(NaN/±Inf 同哨兵)、
+// 其余原生 JSON;NULL(指针 nil / pgtype Valid=false)为 JSON null。
 // 游标不签名:仅定位"调用方本就可发起的同一查询"的读取位置,不构成权限边界。
 func EncodeCursor(fp uint64, seq []SortField, vals []any) (string, error) {
 	if len(vals) != len(seq) {
@@ -97,7 +100,7 @@ func DecodeCursor(cursor string, fp uint64, seq []SortField) ([]any, error) {
 
 // encodeCursorValue 将模型行字段值按 dataType 编码为可 JSON 化的值。
 // 覆盖 sqlc-gen-go(pgx/v5)模型的字段类型:原生类型、指针,以及 pgtype
-// 包装类型(Timestamptz/Date/UUID,Valid=false 编码为 null)。
+// 包装类型(Timestamptz/Date/UUID/Numeric,Valid=false 编码为 null)。
 func encodeCursorValue(dt DataType, v any) (any, error) {
 	switch v := v.(type) {
 	case nil:
@@ -129,6 +132,13 @@ func encodeCursorValue(dt DataType, v any) (any, error) {
 			return nil, nil
 		}
 		return uuid.UUID(v.Bytes).String(), nil
+	case pgtype.Numeric:
+		return formatCursorNumeric(v), nil
+	case *pgtype.Numeric:
+		if v == nil {
+			return nil, nil
+		}
+		return formatCursorNumeric(*v), nil
 	case string:
 		return v, nil
 	case *string:
@@ -219,6 +229,61 @@ func formatCursorNumber(f float64) any {
 	}
 }
 
+// formatCursorNumeric 将 numeric 列值编码为游标值:NULL 与 NaN/±Infinity 同
+// number 哨兵约定,有限值编码为保留标度的十进制字符串(Int × 10^Exp)。
+// 字符串化不损失精度,排序语义不变:游标值仅作 seek 参数,比较在服务端以
+// ?::numeric 精确进行;1.5 与 1.50 编码串不同但 numeric 等值判定等价,
+// 不影响续翻定位。
+func formatCursorNumeric(n pgtype.Numeric) any {
+	switch {
+	case !n.Valid:
+		return nil
+	case n.NaN:
+		return sentinelNaN
+	case n.InfinityModifier == pgtype.Infinity:
+		return sentinelPosInf
+	case n.InfinityModifier == pgtype.NegativeInfinity:
+		return sentinelNegInf
+	default:
+		return numericDecimalString(n.Int, n.Exp)
+	}
+}
+
+// numericDecimalString 将 pgtype.Numeric 的有限值渲染为十进制字符串,文本形态
+// 与 pgx 编码器一致(Int == nil 是零值 Numeric 的形态,渲染为 "0";
+// 二进制扫描的零值为 Int=0、Exp=0,走通用路径结果相同)。
+func numericDecimalString(intVal *big.Int, exp int32) string {
+	if intVal == nil {
+		return "0"
+	}
+	s := intVal.String() // 含符号
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	var b strings.Builder
+	if neg {
+		b.WriteByte('-')
+	}
+	switch e := int(exp); {
+	case e >= 0:
+		b.WriteString(s)
+		b.WriteString(strings.Repeat("0", e))
+	default:
+		if k := -e; len(s) <= k {
+			b.WriteString("0.")
+			b.WriteString(strings.Repeat("0", k-len(s)))
+			b.WriteString(s)
+		} else {
+			i := len(s) - k
+			b.WriteString(s[:i])
+			b.WriteByte('.')
+			b.WriteString(s[i:])
+		}
+	}
+	return b.String()
+}
+
 // decodeCursorValue 将游标 JSON 值按 dataType 收敛为可参数化的 Go 值。
 // NULL(JSON null)是合法游标值,保留为 nil,由 seek 谓词的 NULL 分支处理。
 func decodeCursorValue(dt DataType, v any) (any, error) {
@@ -230,6 +295,8 @@ func decodeCursorValue(dt DataType, v any) (any, error) {
 		return AsInt64(v)
 	case DataTypeNumber:
 		return decodeCursorNumber(v)
+	case DataTypeDecimal:
+		return AsDecimal(v)
 	case DataTypeDatetime:
 		return AsTime(v)
 	case DataTypeDate:

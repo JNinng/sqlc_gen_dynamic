@@ -444,7 +444,8 @@ P = K(c1,v1) ∨ ( E(c1,v1) ∧ K(c2,v2) ) ∨ … ∨ ( E(c1,v1) ∧ … ∧ E(
 | PG 类型             | dataType  | Params Go 类型                                                         |
 |-------------------|-----------|----------------------------------------------------------------------|
 | int2/4/8, serial  | integer   | int64                                                                |
-| numeric, float4/8 | number    | float64                                                              |
+| numeric           | decimal   | float64（where 参数 `?::numeric`；游标值以十进制字符串编解码，现行细节以 [dsl.md §4.1](./dsl.md) 为准） |
+| float4/8          | number    | float64                                                              |
 | timestamptz       | datetime  | time.Time                                                            |
 | timestamp（无时区）    | datetime  | time.Time（语义为数据库本地时间；收敛与游标编码按无时区字面量处理。**新表建议一律 timestamptz**，避免时区歧义） |
 | date              | date      | time.Time                                                            |

@@ -269,6 +269,38 @@ func TestGenerateNumericCast(t *testing.T) {
 	}
 }
 
+// TestGenerateNumericSortable 覆盖 numeric 列的 @sortable 放行:registry 以
+// DataTypeDecimal + Cast "::numeric" 发射,游标取值直通 pgtype.Numeric 模型
+// 字段(编码/解码由 dynq 的 decimal 分支承担)。registry 断言以 balance 字段
+// 块锚定——裸 "Sortable:   true," 对任意列都命中,归因不了 balance。
+func TestGenerateNumericSortable(t *testing.T) {
+	req := loadGoldenRequest(t)
+	setComment(req, "users", "balance", "余额 [元] [@dynamic: range @sortable @hideable @updatable: set]")
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	src := mustFile(t, resp, "users_dynamic_gen.go")
+	balanceRegistry := `Key:        "balance",
+			Column:     "balance",
+			Label:      "余额 [元]",
+			DataType:   dynq.DataTypeDecimal,
+			Nullable:   true,
+			Ops:        []dynq.Op{dynq.OpGt, dynq.OpGte, dynq.OpLt, dynq.OpLte, dynq.OpBetween},
+			Sortable:   true,
+			Selectable: true,
+			Hidden:     false,
+			Cast:       "::numeric",`
+	for _, want := range []string{
+		balanceRegistry,
+		"case \"balance\":\n\t\t\tvals[i] = row.Balance",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("numeric sortable surface missing %q", want)
+		}
+	}
+}
+
 func TestGenerateTablesFilter(t *testing.T) {
 	req := loadGoldenRequest(t)
 	req.PluginOptions = []byte(`{

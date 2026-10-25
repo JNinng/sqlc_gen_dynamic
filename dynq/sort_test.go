@@ -169,6 +169,24 @@ func TestSeekPredicateMixedDirections(t *testing.T) {
 	}
 }
 
+func TestSeekPredicateNumericCast(t *testing.T) {
+	// numeric 排序列:游标值为十进制字符串参数,占位符发射 ?::numeric,
+	// 比较在服务端以 numeric 精确进行(1.50 与 1.5 等值)。
+	seq := []SortField{
+		{Key: "balance", Column: "balance", DataType: DataTypeDecimal, Nullable: true, Cast: "::numeric"},
+		{Key: "id", Column: "id", DataType: DataTypeInteger},
+	}
+	p, err := SeekPredicate(seq, []any{"12.50", int64(7)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := sqlize(t, p)
+	want := "(((balance > ?::numeric OR balance IS NULL)) OR (balance IS NOT DISTINCT FROM ?::numeric AND id > ?))"
+	if got != want {
+		t.Fatalf("seek numeric:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestSeekPredicateNullableNULLBranches(t *testing.T) {
 	meta := testMeta()
 

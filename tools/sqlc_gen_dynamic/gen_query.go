@@ -10,20 +10,24 @@ import (
 // Schema 段见 gen_exec.go)。
 
 // Cast 返回 seek 谓词与 where 等值比较需要的显式 cast 后缀。
-// 文本形态参数(string)与 uuid/enum 列比较、[]byte/[]int64 与 jsonb/int_array
-// 列比较均需显式 cast,不依赖预编译语句的参数类型推断。
+// 文本形态参数(string)与 uuid/enum/decimal 列比较、[]byte/[]int64 与 jsonb/
+// int_array 列比较均需显式 cast,不依赖预编译语句的参数类型推断。
 func (c *ColumnSpec) Cast() string {
 	switch c.DataType {
 	case "uuid":
 		return "::uuid"
 	case "enum":
 		return "::" + c.EnumPhysical
+	case "decimal":
+		// numeric 列的游标值以十进制字符串参数化,?::numeric 交服务端精确解析,
+		// 不经 float8 中转(高精度值不失真)。
+		return "::numeric"
 	default:
 		return ""
 	}
 }
 
-// whereCast 是 where 构造的 cast 后缀(比 Cast 多覆盖 jsonb / int_array / numeric)。
+// whereCast 是 where 构造的 cast 后缀(比 Cast 多覆盖 jsonb / int_array)。
 func (c *ColumnSpec) whereCast() string {
 	switch c.DataType {
 	case "uuid":
@@ -34,13 +38,10 @@ func (c *ColumnSpec) whereCast() string {
 		return "::jsonb"
 	case "int_array":
 		return "::int4[]"
-	case "number":
+	case "decimal":
 		// numeric 列:float8 参数显式收敛为 numeric,避免列被隐式转 float8
 		// 比较(索引失效、高精度 numeric 比较失真)。float4/float8 无需 cast。
-		if c.NumericCast {
-			return "::numeric"
-		}
-		return ""
+		return "::numeric"
 	default:
 		return ""
 	}

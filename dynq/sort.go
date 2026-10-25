@@ -15,7 +15,7 @@ type SortField struct {
 	DataType DataType
 	Nullable bool
 	Desc     bool
-	// Cast 是占位符的显式 cast 后缀(uuid/enum 列的文本参数需要),空 = 无。
+	// Cast 是占位符的显式 cast 后缀(uuid/enum/decimal 列的文本形态参数需要),空 = 无。
 	Cast string
 }
 

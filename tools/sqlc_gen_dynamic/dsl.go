@@ -152,6 +152,7 @@ func validateTagNames(where, scope string, tags []dslTag) error {
 		allowed = map[string]bool{
 			"dynamic": true, "sortable": true, "internal": true, "hideable": true,
 			"updatable": true, "api": true,
+			"label": true, "desc": true, "order": true, "options": true,
 			"hidden": true, "selectable": true, // 弃用旧名(兼容期别名)
 		}
 	} else {
@@ -352,6 +353,75 @@ func parseDefaultSortDirective(where string, t dslTag) (column string, desc bool
 		return "", false, fmt.Errorf("%s: @default_sort direction must be ASC or DESC, got %q", where, parts[1])
 	}
 	return parts[0], desc, nil
+}
+
+// parseLabelLikeDirective 解析自由文本注解(@label / @desc)的 payload:
+// 非空校验唯一(payload 在上游分词已折叠连续空格)。
+func parseLabelLikeDirective(where, name, payload string) (string, error) {
+	if payload == "" {
+		return "", fmt.Errorf("%s: @%s wants a non-empty payload", where, name)
+	}
+	return payload, nil
+}
+
+// parseOrderDirective 解析 @order 的 payload 为排序序号整数(可负)。
+func parseOrderDirective(where string, t dslTag) (int, error) {
+	n, err := strconv.Atoi(t.Payload)
+	if err != nil {
+		return 0, fmt.Errorf("%s: @order wants an integer, got %q", where, t.Payload)
+	}
+	return n, nil
+}
+
+// OptionSpec 是 @options 的一项静态字典项(插件侧;dynq.FieldOption 为运行期形态)。
+type OptionSpec struct {
+	Value any // 生成期按列 dataType 定型:integer → int64,string/uuid → string
+	Label string
+}
+
+// parseOptionsDirective 解析 @options 的 payload:空白分隔的 "<value>=<label>"
+// 对(首个 '=' 切分,label 可含后续 '=',不得含空白)。零对、缺 '=' 或 label
+// 为空 → 生成期 fail;value 按 dataType 定型(integer → int64,解析失败 fail;
+// string/uuid → string),重复 value → fail。
+func parseOptionsDirective(where string, t dslTag, dataType string) ([]OptionSpec, error) {
+	fail := func(format string, args ...any) error {
+		return fmt.Errorf("%s: %s", where, fmt.Sprintf(format, args...))
+	}
+	items := strings.Fields(t.Payload)
+	if len(items) == 0 {
+		return nil, fail(`@options wants "<value>=<label>" pairs separated by spaces, got %q`, t.Payload)
+	}
+	out := make([]OptionSpec, 0, len(items))
+	seen := map[string]bool{}
+	for _, item := range items {
+		value, label, ok := strings.Cut(item, "=")
+		if !ok {
+			return nil, fail("@options expects <value>=<label> pairs, got %q", item)
+		}
+		if label == "" {
+			return nil, fail("@options label must be non-empty, got %q", item)
+		}
+		var typed any
+		switch dataType {
+		case "integer":
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return nil, fail("@options value %q is not a valid integer (column dataType is integer)", value)
+			}
+			typed = n
+		case "string", "uuid":
+			typed = value
+		default:
+			return nil, fail("@options not supported for dataType %s (want integer|uuid|string fields)", dataType)
+		}
+		key := fmt.Sprint(typed)
+		if seen[key] {
+			return nil, fail("@options value %s declared twice", key)
+		}
+		seen[key] = true
+		out = append(out, OptionSpec{Value: typed, Label: label})
+	}
+	return out, nil
 }
 
 // scopeGuard 是 @scope 声明的一项守卫:目标列、谓词操作符、守卫函数与实参列表。

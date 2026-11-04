@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -67,7 +69,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 		{
 			name:    "unknown_tag_lists_new_names_only",
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@selectablee]") },
-			wantErr: "allowed for column: @api, @dynamic, @hideable, @internal, @sortable, @updatable",
+			wantErr: "allowed for column: @api, @desc, @dynamic, @hideable, @internal, @label, @options, @order, @sortable, @updatable",
 		},
 		{
 			name:    "unknown_column_scope_tag",
@@ -730,6 +732,79 @@ func TestGenerateDSLFailures(t *testing.T) {
 			},
 			wantErr: "allowed for table: @default_sort, @filter, @page, @pk, @scope, @update",
 		},
+		// ---- 展示注解(@label/@desc/@order/@options)fail 路径 ----
+		{
+			name:    "label_empty_payload",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@label]") },
+			wantErr: "@label wants a non-empty payload",
+		},
+		{
+			name:    "desc_empty_payload",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@desc:]") },
+			wantErr: "@desc wants a non-empty payload",
+		},
+		{
+			name:    "order_empty_payload",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@order]") },
+			wantErr: `@order wants an integer, got ""`,
+		},
+		{
+			name:    "order_not_integer",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@order: 十]") },
+			wantErr: `@order wants an integer, got "十"`,
+		},
+		{
+			name:    "annotation_at_table_scope",
+			mutate:  func(r *pb.GenerateRequest) { setTableComment(r, "users", "用户表 [@label: 用户 @pk: id]") },
+			wantErr: "unknown directive @label",
+		},
+		{
+			name:    "annotation_payload_unknown_at_word",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@label: 见 @bogusword 说明]") },
+			wantErr: "unknown directive @bogusword",
+		},
+		{
+			name:    "options_empty_payload",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "role", "角色 [@options]") },
+			wantErr: `@options wants "<value>=<label>" pairs separated by spaces, got ""`,
+		},
+		{
+			name:    "options_on_enum_column",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "status", "状态 [@options: active=启用]") },
+			wantErr: "@options not supported for dataType enum",
+		},
+		{
+			name:    "options_on_jsonb_column",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "meta", "元数据 [@options: k=v]") },
+			wantErr: "@options not supported for dataType jsonb",
+		},
+		{
+			name:    "options_value_not_integer",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "age", "年龄 [@options: abc=未知]") },
+			wantErr: `@options value "abc" is not a valid integer (column dataType is integer)`,
+		},
+		{
+			name:    "options_pair_missing_equals",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "role", "角色 [@options: admin]") },
+			wantErr: `@options expects <value>=<label> pairs, got "admin"`,
+		},
+		{
+			name:    "options_empty_label",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "role", "角色 [@options: admin=]") },
+			wantErr: `@options label must be non-empty, got "admin="`,
+		},
+		{
+			name:    "options_duplicate_value",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "age", "年龄 [@options: 1=成年 1=未成年]") },
+			wantErr: "@options value 1 declared twice",
+		},
+		{
+			name: "options_combined_with_api",
+			mutate: func(r *pb.GenerateRequest) {
+				setComment(r, "users", "org_id", "组织 [@api: /x value_key=v label_key=l @options: 1=总部]")
+			},
+			wantErr: "@options cannot be combined with @api (one option source per column)",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -782,8 +857,8 @@ func TestDeprecatedDirectiveAliases(t *testing.T) {
 		t.Fatalf("buildTableSpecs (old names): %v", err)
 	}
 	wantWarns := []string{
-		"column users.id: @selectable is deprecated, use @hideable instead (the old name will be removed in v0.6.0)",
-		"column users.password: @hidden is deprecated, use @internal instead (the old name will be removed in v0.6.0)",
+		"deprecation: column users.id: @selectable is deprecated, use @hideable instead (the old name will be removed in v0.6.0)",
+		"deprecation: column users.password: @hidden is deprecated, use @internal instead (the old name will be removed in v0.6.0)",
 	}
 	if len(warns) != len(wantWarns) {
 		t.Fatalf("want %d deprecations, got %d: %v", len(wantWarns), len(warns), warns)
@@ -1405,4 +1480,155 @@ func TestGoTypeOverrideDivergence(t *testing.T) {
 			t.Error("fuzzy-only slots do not reference the override type; import must be skipped")
 		}
 	})
+}
+
+// TestParseOptionsDirective 覆盖 @options 解析:多对、integer 定型 int64、
+// 负数、string/uuid 定型、label 含后续 '='、零对、缺 '='、空 label、
+// 重复 value、integer 值非法、白名单外 dataType。
+func TestParseOptionsDirective(t *testing.T) {
+	parse := func(dataType, payload string) ([]OptionSpec, error) {
+		return parseOptionsDirective("column t.c", dslTag{Name: "options", Payload: payload}, dataType)
+	}
+	// 多对解析 + integer 定型 int64。
+	pairs, err := parse("integer", "0=未知 18=成年")
+	if err != nil || len(pairs) != 2 {
+		t.Fatalf("pairs: %+v %v", pairs, err)
+	}
+	if pairs[0].Value != int64(0) || pairs[0].Label != "未知" || pairs[1].Value != int64(18) || pairs[1].Label != "成年" {
+		t.Fatalf("integer typing: %+v", pairs)
+	}
+	// 负数合法。
+	if pairs, err = parse("integer", "-3=欠费"); err != nil || pairs[0].Value != int64(-3) {
+		t.Fatalf("negative: %+v %v", pairs, err)
+	}
+	// string 定型;uuid 同 string(不做格式约束)。
+	if pairs, err = parse("string", "admin=管理员"); err != nil || pairs[0].Value != "admin" || pairs[0].Label != "管理员" {
+		t.Fatalf("string typing: %+v %v", pairs, err)
+	}
+	if pairs, err = parse("uuid", "11111111-1111-1111-1111-111111111111=总部"); err != nil || pairs[0].Value != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("uuid typing: %+v %v", pairs, err)
+	}
+	// 首个 '=' 切分,label 可含后续 '='。
+	if pairs, err = parse("string", "1=比例=100"); err != nil || pairs[0].Value != "1" || pairs[0].Label != "比例=100" {
+		t.Fatalf("label with equals: %+v %v", pairs, err)
+	}
+	// 失败路径。
+	if _, err = parse("integer", ""); err == nil || !strings.Contains(err.Error(), `@options wants "<value>=<label>" pairs`) {
+		t.Fatalf("zero pairs: %v", err)
+	}
+	if _, err = parse("string", "admin"); err == nil || !strings.Contains(err.Error(), `@options expects <value>=<label> pairs, got "admin"`) {
+		t.Fatalf("missing equals: %v", err)
+	}
+	if _, err = parse("string", "admin="); err == nil || !strings.Contains(err.Error(), `@options label must be non-empty, got "admin="`) {
+		t.Fatalf("empty label: %v", err)
+	}
+	if _, err = parse("integer", "1=成年 1=未成年"); err == nil || !strings.Contains(err.Error(), "@options value 1 declared twice") {
+		t.Fatalf("duplicate value: %v", err)
+	}
+	if _, err = parse("integer", "abc=未知"); err == nil || !strings.Contains(err.Error(), `@options value "abc" is not a valid integer`) {
+		t.Fatalf("integer mismatch: %v", err)
+	}
+	if _, err = parse("enum", "active=启用"); err == nil || !strings.Contains(err.Error(), "@options not supported for dataType enum") {
+		t.Fatalf("unsupported dataType: %v", err)
+	}
+}
+
+// TestAnnotationPayloadSymbolMatrix 锁定 payload 文本符号兼容矩阵(dsl.md §6):
+// 全角标点原样保留、成对方括号保留、连续空格折叠为单个、payload 内 @ 起始词
+// 按新指令分词(白名单内静默改变列能力)、未配对 [ 在注释层 unclosed fail。
+func TestAnnotationPayloadSymbolMatrix(t *testing.T) {
+	findPayload := func(t *testing.T, tags []dslTag, name string) string {
+		t.Helper()
+		tag, ok := findTag(tags, name)
+		if !ok {
+			t.Fatalf("directive @%s missing in %v", name, tags)
+		}
+		return tag.Payload
+	}
+	// 全角标点(：，、（）)与 % 原样保留:指令名只在首个 ASCII ':' 处切分。
+	label, tags, err := parseComment("column t.c", "状态 [@label: 状态：启用（正常）、含%号]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findPayload(t, tags, "label"); got != "状态：启用（正常）、含%号" {
+		t.Fatalf("fullwidth payload: %q", got)
+	}
+	if label != "状态" {
+		t.Fatalf("free text label: %q", label)
+	}
+	// 成对方括号参与块边界深度计数,原样保留在 payload 中。
+	if _, tags, err = parseComment("column t.c", "说明 [@desc: 数组[0] 起]"); err != nil {
+		t.Fatal(err)
+	}
+	if got := findPayload(t, tags, "desc"); got != "数组[0] 起" {
+		t.Fatalf("paired brackets: %q", got)
+	}
+	// 连续空格折叠为单个(既有分词行为)。
+	if _, tags, err = parseComment("column t.c", "文本 [@label: a   b]"); err != nil {
+		t.Fatal(err)
+	}
+	if got := findPayload(t, tags, "label"); got != "a b" {
+		t.Fatalf("space folding: %q", got)
+	}
+	// payload 内 @ 起始词:白名单内(如误写 @sortable)→ 静默改变列能力,
+	// 分词器无法与真实声明区分——文档警告文案不得出现 @ 起始的词。
+	_, tags, err = parseComment("column t.c", "文本 [@desc: 误写 @sortable 标记]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := findTag(tags, "sortable"); !ok {
+		t.Fatalf("@sortable in payload must be tokenized as a directive: %v", tags)
+	}
+	// 未配对 [ → unclosed fail(注释层,已有路径)。
+	if _, _, err = parseComment("column t.c", "说明 [@desc: 数组[0"); err == nil || !strings.Contains(err.Error(), "unclosed '['") {
+		t.Fatalf("unpaired open bracket: %v", err)
+	}
+}
+
+// TestInternalAnnotationCombinationWarning:@internal 列上的展示注解 → 生成期
+// 告警(不 fail),随 deprecation 同一通道输出 stderr,注明列位置;internal 列
+// 不进 schema,声明无效。
+func TestInternalAnnotationCombinationWarning(t *testing.T) {
+	req := loadGoldenRequest(t)
+	setComment(req, "users", "password", "密码 [@internal @updatable @label: 密码文本 @desc: 登录凭据]")
+	opts, err := ParseOptions(req)
+	if err != nil {
+		t.Fatalf("ParseOptions: %v", err)
+	}
+	want := "warning: column users.password: @label, @desc on an @internal column has no effect (@internal columns are excluded from the frontend schema)"
+	_, notices, err := buildTableSpecs(req, opts)
+	if err != nil {
+		t.Fatalf("buildTableSpecs: %v", err) // 告警不 fail
+	}
+	found := false
+	for _, n := range notices {
+		if n == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warning notice missing, got %v", notices)
+	}
+
+	// stderr 通道:Generate 的告警输出带 sqlc_gen_dynamic: 前缀与列位置,
+	// 与 deprecation 提示同一形态。
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = oldStderr })
+	_, genErr := Generate(context.Background(), req)
+	w.Close()
+	if genErr != nil {
+		t.Fatalf("Generate must succeed with warning only: %v", genErr)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "sqlc_gen_dynamic: warning: column users.password: @label, @desc") {
+		t.Fatalf("stderr output missing warning, got:\n%s", b)
+	}
 }

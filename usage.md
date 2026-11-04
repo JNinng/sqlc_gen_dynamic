@@ -85,7 +85,7 @@ sql:
           page_max: 200
 ```
 
-动态表声明写在 schema.sql 的 `COMMENT ON` 中(列级 `@dynamic` / `@sortable` / `@hideable` / `@internal` / `@updatable` / `@api`,表级 `@default_sort` / `@page` / `@pk` / `@update` / `@scope` / `@filter`;`@updatable` 支持 `auto` / `set` / `where` / `false` / 显式 op 清单五形态,`@update` 支持裸形态与 `true` / `false` / `auto`;旧名 `@selectable` / `@hidden` 为兼容期别名,生成期有 deprecation 提示);DSL 语法、能力矩阵、预设展开与 fail 条件全集见 [dsl.md](./dsl.md),非法声明为生成期 fail,报错定位到具体列。
+动态表声明写在 schema.sql 的 `COMMENT ON` 中(列级 `@dynamic` / `@sortable` / `@hideable` / `@internal` / `@updatable` / `@api`,以及仅作用于前端 schema 的展示注解 `@label` / `@desc` / `@order` / `@options`,表级 `@default_sort` / `@page` / `@pk` / `@update` / `@scope` / `@filter`;`@updatable` 支持 `auto` / `set` / `where` / `false` / 显式 op 清单五形态,`@update` 支持裸形态与 `true` / `false` / `auto`;旧名 `@selectable` / `@hidden` 为兼容期别名,生成期有 deprecation 提示);DSL 语法、能力矩阵、预设展开与 fail 条件全集见 [dsl.md](./dsl.md),非法声明为生成期 fail,报错定位到具体列。
 
 ### codegen options
 

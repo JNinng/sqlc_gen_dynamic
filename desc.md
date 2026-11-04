@@ -186,7 +186,7 @@ diff。CI 中 sqlc 版本固定。
 ### 5.2 DSL 语法与边界隔离
 
 为消除人类自然语言注释与机器解析指令的歧义，DSL 引入**边界分隔符**，指令必须包裹在 `[ ]` 中且内容以 `@` 起始。
-**列级**：`<label> [@dynamic: <项,项,...>] [@sortable] [@internal] [@updatable: <auto|set|where|false|<op,op,...>>] [@hideable] [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]`
+**列级**：`<label> [@dynamic: <项,项,...>] [@sortable] [@internal] [@updatable: <auto|set|where|false|<op,op,...>>] [@hideable] [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]] [@label: <文本>] [@desc: <文本>] [@order: <整数>] [@options: <value>=<label> ...]`
 **表级**：`[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>] [@update: <true|false|auto>] [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...] [@filter: <列> <op> [字面量] ...]`
 
 > 列级指令的现行名为 `@internal` / `@hideable`；旧名 `@hidden` / `@selectable` 在兼容期解析为等价能力（生成期输出 deprecation 提示，计划 v0.6.0 移除），新 DDL 应使用现行名。
@@ -220,7 +220,7 @@ where 值控件的 options 经 `GET/POST {endpoint}` 拉取，而非静态 `enum
    字面文本，方括号原样保留（如上例“状态 [已废弃]”）。人类注释中的方括号因此不会误伤。
 3. **Label 纯洁性**：非指令块文本（含其中出现的任何 `@` 符号与方括号）原样保留为展示文本，不触发任何解析逻辑。
 4. **多指令块**：同一列允许多个指令块，按出现顺序合并解析；同名指令重复声明等价于声明一次（去重）。
-5. **指令识别**：合法列级指令为 `@dynamic` / `@sortable` / `@internal` / `@hideable` / `@updatable` / `@api`；合法表级指令为 `@default_sort` /
+5. **指令识别**：合法列级指令为 `@dynamic` / `@sortable` / `@internal` / `@hideable` / `@updatable` / `@api` / `@label` / `@desc` / `@order` / `@options`；合法表级指令为 `@default_sort` /
    `@page` / `@pk` / `@update` / `@scope` / `@filter`。`[ ]` 内出现白名单外的 `@xxx`（如手误 `@sortble`）→ **生成期 fail**，报错定位到具体列与未知标签名，杜绝静默忽略导致的能力丢失。
 6. **无 `[ ]` 或无指令块的纯文本注释**：纯业务说明，直接作为 label，跳过解析。
 7. **无 `@dynamic` 的列**不参与过滤能力生成（受 `default_ops` 控制）。
@@ -608,7 +608,7 @@ func CountUsers(ctx context.Context, db DBTX, params ListUsersParams, opts ...dy
 func UsersQuerySchema(opts ...dynq.QueryOption) dynq.ResourceSchema
 ```
 
-返回 `dynq.ResourceSchema`：资源名、字段列表（field、label、dataType、可空、sortable、hideable、op 集、枚举值；
+返回 `dynq.ResourceSchema`：资源名、字段列表（field、label（`@label` 注解 → 注释自由文本 → 列名回退）、dataType、可空、sortable、hideable、op 集、枚举值、`desc` / `options` 注解键（`omitempty`，未声明不输出）、`@order` 排序投影——已标注字段按序号升序在前，未标注保持 DDL 声明序殿后；
 `hideable` 为主键，过渡期同值输出旧键 `selectable`）、
 默认排序、分页参数（含双模式与 includeTotal 说明）。不携带 ui 字段——渲染规则见 §10.2。
 opts 禁用目标不在 registry 属编程错误：Parse / List / Count 返回 error，Schema 签名无 error 返回，以 panic 显式暴露。
@@ -750,6 +750,8 @@ schema 输出字段级 `api` 对象：
 | DSL 声明非法（类型不支持、非空列声明 null op、camel 冲突、@default_sort 指向不可排序列、@page 默认超上限） | **生成期 fail**                           |
 | DSL 方括号内未知 `@` 标签 / 方括号未闭合 / **`@internal` 与任一正向标记组合**                     | **生成期 fail**                           |
 | `@api` 声明非法（非 integer/uuid/string 列、缺 value_key/label_key、未知参数、mode 非法、endpoint 含 `?`） | **生成期 fail**                           |
+| `@label` / `@desc` / `@order` / `@options` 声明非法（payload 为空、`@order` 非整数、`@options` 非 integer/uuid/string 列、对缺 `=`、label 为空、value 与类型不符、value 重复、与 `@api` 同列） | **生成期 fail**                           |
+| `@label` / `@desc` / `@order` / `@options` 与 `@internal` 组合                | **非 fail 生成期告警**（internal 列不进 schema，注解声明无效；stderr 注明列位置，随 deprecation 同通道输出） |
 
 ---
 

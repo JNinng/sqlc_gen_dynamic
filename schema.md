@@ -4,6 +4,7 @@
 
 - 查询入参契约、响应信封 → 见 [README](./README.md)
 - `@api` 指令的 DSL 语法与校验规则 → 见 [dsl.md §2.5](./dsl.md#25-api)
+- `@label` / `@desc` / `@order` / `@options` 展示注解 → 见 [dsl.md §2.8](./dsl.md#28-展示注解label--desc--order--options)
 - 设计原理与 UI 推断 → 见 [desc.md §10](./desc.md)
 
 - **交付端点**:`GET /{resource}/_query-schema`;`ResourceSchema.Hash()` 为内容 hash,可作 ETag 长缓存(同一 opts 切片产出字节级相同 schema)
@@ -14,7 +15,7 @@
 | 键 | 值类型 | 含义 |
 |---|---|---|
 | `resource` | string | 资源名(如 `"users"`) |
-| `fields` | FieldSchema[] | 字段契约列表,见下表 |
+| `fields` | FieldSchema[] | 字段契约列表,见下表。**数组顺序**:`@order` 已标注字段按序号升序在前(同号按 DDL 声明序),未标注字段保持 DDL 声明序殿后;registry 与协议校验不受影响,保持 DDL 声明序 |
 | `defaultSort` | `{ "field": string, "desc": boolean }[]` | 缺省排序回落(查询未指定排序时生效) |
 | `pagination` | object | 见下方 pagination 键表 |
 
@@ -23,7 +24,7 @@
 | 键 | 值类型 | 含义 |
 |---|---|---|
 | `field` | string | 逻辑字段名(camelCase) |
-| `label` | string | 展示文本(注释非指令部分) |
+| `label` | string | 展示文本;来源链:`@label` 注解 → 注释非指令自由文本 → 列名 |
 | `dataType` | string(枚举) | `integer` / `number` / `decimal` / `datetime` / `date` / `string` / `boolean` / `uuid` / `enum` / `jsonb` / `int_array`(`decimal` 为 `numeric` 列) |
 | `nullable` | boolean | 列可空性 |
 | `sortable` | boolean | 可排序 → 表格列头可挂排序 |
@@ -32,6 +33,8 @@
 | `ops` | string[] | 本调用点有效的 where 操作符全集(能力上限 = 生成期 DSL;**操作符渲染的唯一事实源**,见下方渲染规则) |
 | `enum` | string[](可选) | 枚举值列表(仅 `enum` 类型,下拉组件的 options 取自此;编译期可确定时用,静态) |
 | `api` | object(可选) | 选项数据源为远程接口(`@api` 声明);有 `api` 时值控件 options 经接口拉取,`enum` 不出现。见下方 @api 契约 |
+| `desc` | string(可选) | 字段描述(`@desc` 注解;枚举值释义、单位说明等);未声明时键整体省略(`omitempty`,存量资源 schema 字节级不变) |
+| `options` | `{ "value": number\|string, "label": string }[]`(可选) | 静态字典选项(`@options` 注解),渲染下拉/多选控件;value 按列 `dataType` 定型(integer → number,string/uuid → string);未声明时键整体省略。动态选项场景用 `api`(`@options` 与 `@api` 同列互斥) |
 
 > schema **不携带 `ui` 字段**:控件族由 `dataType` 唯一确定(映射表见下方渲染规则),操作符与值控件形态由 `ops` 驱动——渲染信息全部可由 `(dataType, ops, sortable, hideable)` 派生,不做第二份副本。
 
@@ -92,10 +95,49 @@
 
 ## 示例(`UsersQuerySchema()` 节选)
 
+`@order` 已标注字段排前(age `-1`、email/status 同号 `10` 按声明序),未标注字段殿后;`desc` / `options` 键仅注解声明的字段出现:
+
 ```json
 {
   "resource": "users",
   "fields": [
+    {
+      "field": "age",
+      "label": "年龄",
+      "dataType": "integer",
+      "nullable": true,
+      "sortable": true,
+      "hideable": true,
+      "selectable": true,
+      "ops": ["eq", "neq", "in", "not_in", "gt", "gte", "lt", "lte", "between"],
+      "options": [
+        { "value": 0, "label": "未知" },
+        { "value": 18, "label": "成年" },
+        { "value": 65, "label": "退休" }
+      ]
+    },
+    {
+      "field": "email",
+      "label": "电子邮箱",
+      "dataType": "string",
+      "nullable": false,
+      "sortable": false,
+      "hideable": true,
+      "selectable": true,
+      "ops": ["eq", "neq", "in", "not_in", "prefix"]
+    },
+    {
+      "field": "status",
+      "label": "用户状态",
+      "dataType": "enum",
+      "nullable": false,
+      "sortable": true,
+      "hideable": true,
+      "selectable": true,
+      "ops": ["eq", "neq", "in", "not_in"],
+      "enum": ["active", "inactive", "banned"],
+      "desc": "账号的启用状态"
+    },
     {
       "field": "name",
       "label": "姓名",
@@ -105,21 +147,6 @@
       "hideable": true,
       "selectable": true,
       "ops": ["contains", "prefix", "suffix", "eq", "neq"]
-    },
-    {
-      "field": "status",
-      "label": "状态",
-      "dataType": "enum",
-      "sortable": true,
-      "ops": ["eq", "neq", "in", "not_in"],
-      "enum": ["active", "inactive", "banned"]
-    },
-    {
-      "field": "deletedAt",
-      "label": "删除时间",
-      "dataType": "datetime",
-      "nullable": true,
-      "ops": ["is_null", "not_null"]
     }
   ],
   "defaultSort": [{ "field": "createdAt", "desc": true }],

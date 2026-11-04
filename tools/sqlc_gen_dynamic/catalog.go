@@ -58,6 +58,12 @@ type ColumnSpec struct {
 	OverrideDivergent bool
 	// API 是 @api 选项数据源声明(nil = 无)。
 	API *APISpec
+	// Desc 是 @desc 注解的字段描述(空 = 未声明),仅进入前端 schema。
+	Desc string
+	// Order 是 @order 注解的 schema 排序序号(nil = 未标注)。
+	Order *int
+	// Options 是 @options 注解的静态字典选项(nil = 未声明)。
+	Options []OptionSpec
 	// DSL 回显(文件头策略来源)。
 	Directives []string
 }
@@ -103,7 +109,8 @@ type sortDirective struct {
 }
 
 // buildTableSpecs 从 Catalog 构建生成范围(§5.1/§5.3)。
-// 第二返回值是 deprecation 提示(旧指令名使用,按列去重),由入口输出到 stderr。
+// 第二返回值是生成期告警(notices:弃用旧名提示与注解无效告警,每条自带
+// "deprecation: "/"warning: "分类前缀),由入口输出到 stderr。
 func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, []string, error) {
 	schema := findSchema(req.Catalog, opts.Schema)
 	if schema == nil {
@@ -115,13 +122,13 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, []st
 	// 逐表解析注释 DSL。
 	byName := map[string]*TableSpec{}
 	var order []*TableSpec
-	var deprecations []string
+	var notices []string
 	for _, table := range schema.Tables {
 		spec, included, deps, err := buildTable(table, schema.Name, opts, enums)
 		if err != nil {
 			return nil, nil, err
 		}
-		deprecations = append(deprecations, deps...)
+		notices = append(notices, deps...)
 		if !included {
 			continue
 		}
@@ -173,7 +180,7 @@ func buildTableSpecs(req *pb.GenerateRequest, opts *Options) ([]*TableSpec, []st
 	if len(order) == 0 {
 		return nil, nil, fmt.Errorf("no tables selected for dynamic generation in schema %q (opt a table in via table comment [@pk: <col>], any column [@dynamic: ...], any column [@updatable] with set capability, or options.tables)", opts.Schema)
 	}
-	return order, deprecations, nil
+	return order, notices, nil
 }
 
 func findSchema(catalog *pb.Catalog, name string) *pb.Schema {
@@ -199,7 +206,7 @@ func enumMap(schema *pb.Schema) map[string][]string {
 // buildTable 解析单表;included=false 表示该表无读/写面声明且未被点名。
 // 第三返回值是本表的 deprecation 提示(旧指令名使用)。
 func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[string][]string) (*TableSpec, bool, []string, error) {
-	var deprecations []string
+	var notices []string
 	tableWhere := fmt.Sprintf("table %s", table.Rel.Name)
 	_, tableTags, err := parseComment(tableWhere, table.Comment)
 	if err != nil {
@@ -207,7 +214,9 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 	}
 	tableTags, tableDeps := normalizeTagNames(tableTags)
 	tableTags = mergeTags(tableTags)
-	deprecations = append(deprecations, tableDeps...)
+	for _, d := range tableDeps {
+		notices = append(notices, "deprecation: "+d)
+	}
 	if err := validateTagNames(tableWhere, "table", tableTags); err != nil {
 		return nil, false, nil, err
 	}
@@ -230,7 +239,7 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 		}
 		tags, colDeps := normalizeTagNames(tags)
 		for _, d := range colDeps {
-			deprecations = append(deprecations, colWhere+": "+d)
+			notices = append(notices, "deprecation: "+colWhere+": "+d)
 		}
 		tags = mergeTags(tags)
 		if err := validateTagNames(colWhere, "column", tags); err != nil {
@@ -333,6 +342,53 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 				directive += " mode=" + api.Mode
 			}
 			c.Directives = append(c.Directives, directive)
+		}
+		// 列级展示注解(@label/@desc/@order/@options):仅作用于前端 schema,
+		// 不影响 SQL 与能力生成;与 @internal 组合为生成期告警(internal 列
+		// 不进 schema,声明无效),随 deprecation 同一通道输出。
+		var annotationNames []string
+		if t, ok := findTag(tags, "label"); ok {
+			payload, err := parseLabelLikeDirective(colWhere, "label", t.Payload)
+			if err != nil {
+				return nil, false, nil, err
+			}
+			c.Label = payload
+			annotationNames = append(annotationNames, "@label")
+			c.Directives = append(c.Directives, "@label: "+payload)
+		}
+		if t, ok := findTag(tags, "desc"); ok {
+			payload, err := parseLabelLikeDirective(colWhere, "desc", t.Payload)
+			if err != nil {
+				return nil, false, nil, err
+			}
+			c.Desc = payload
+			annotationNames = append(annotationNames, "@desc")
+			c.Directives = append(c.Directives, "@desc: "+payload)
+		}
+		if t, ok := findTag(tags, "order"); ok {
+			n, err := parseOrderDirective(colWhere, t)
+			if err != nil {
+				return nil, false, nil, err
+			}
+			c.Order = &n
+			annotationNames = append(annotationNames, "@order")
+			c.Directives = append(c.Directives, fmt.Sprintf("@order: %d", n))
+		}
+		if t, ok := findTag(tags, "options"); ok {
+			if hasAPI {
+				return nil, false, nil, fmt.Errorf("%s: @options cannot be combined with @api (one option source per column)", colWhere)
+			}
+			pairs, err := parseOptionsDirective(colWhere, t, dataType)
+			if err != nil {
+				return nil, false, nil, err
+			}
+			c.Options = pairs
+			annotationNames = append(annotationNames, "@options")
+			c.Directives = append(c.Directives, "@options: "+t.Payload)
+		}
+		if internalTag && len(annotationNames) > 0 {
+			notices = append(notices, fmt.Sprintf("warning: %s: %s on an @internal column has no effect (@internal columns are excluded from the frontend schema)",
+				colWhere, strings.Join(annotationNames, ", ")))
 		}
 		// 未标注列不参与过滤能力生成(default_ops=none),但可投影、可被点名。
 		spec.Columns = append(spec.Columns, c)
@@ -450,7 +506,7 @@ func buildTable(table *pb.Table, schemaName string, opts *Options, enums map[str
 			}
 		}
 	}
-	return spec, included, deprecations, nil
+	return spec, included, notices, nil
 }
 
 func dirName(desc bool) string {

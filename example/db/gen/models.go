@@ -190,15 +190,15 @@ type User struct {
 	ID int64 `db:"id" json:"id"`
 	// 姓名 [@dynamic: fuzzy, exact @sortable @hideable @updatable]
 	Name string `db:"name" json:"name"`
-	// 用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable @updatable: set]
+	// 用户邮箱，如 test@example.com [@label: 电子邮箱 @order: 10 @dynamic: exact, in, prefix @hideable @updatable: set]
 	Email string `db:"email" json:"email"`
 	// 密码 [@internal @updatable]
 	Password string `db:"password" json:"password"`
-	// 状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable @updatable]
+	// 状态 [已废弃，仅展示] [@label: 用户状态 @desc: 账号的启用状态 @order: 10 @dynamic: exact, in @sortable @hideable @updatable]
 	Status UserStatus `db:"status" json:"status"`
-	// 角色 [@dynamic: fuzzy @sortable @updatable: exact]
+	// 角色 [@options: admin=管理员 user=普通用户 guest=访客 @dynamic: fuzzy @sortable @updatable: exact]
 	Role *string `db:"role" json:"role"`
-	// 年龄 [@dynamic: exact, in, range @sortable @hideable @updatable: eq, range]
+	// 年龄 [@options: 0=未知 18=成年 65=退休 @order: -1 @dynamic: exact, in, range @sortable @hideable @updatable: eq, range]
 	Age *int32 `db:"age" json:"age"`
 	// 评分 [0-100] [@dynamic: range @sortable @hideable @updatable: set]
 	Score *float64 `db:"score" json:"score"`
@@ -206,7 +206,7 @@ type User struct {
 	Balance pgtype.Numeric `db:"balance" json:"balance"`
 	// 生日 [@dynamic: eq, range @hideable @updatable: false]
 	BirthDate pgtype.Date `db:"birth_date" json:"birth_date"`
-	// 组织ID [@dynamic: exact, in @updatable: where]
+	// 组织ID [@desc: 所属组织的唯一标识 @dynamic: exact, in @updatable: where]
 	OrgID pgtype.UUID `db:"org_id" json:"org_id"`
 	// 标签 [@dynamic: in @hideable @updatable]
 	Tags []int32 `db:"tags" json:"tags"`

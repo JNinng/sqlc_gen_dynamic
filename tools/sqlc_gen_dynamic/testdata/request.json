@@ -59,7 +59,7 @@
               {
                 "name": "email",
                 "notNull": true,
-                "comment": "用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable @updatable: set]",
+                "comment": "用户邮箱，如 test@example.com [@label: 电子邮箱 @order: 10 @dynamic: exact, in, prefix @hideable @updatable: set]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -83,7 +83,7 @@
               {
                 "name": "status",
                 "notNull": true,
-                "comment": "状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable @updatable]",
+                "comment": "状态 [已废弃，仅展示] [@label: 用户状态 @desc: 账号的启用状态 @order: 10 @dynamic: exact, in @sortable @hideable @updatable]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -94,7 +94,7 @@
               },
               {
                 "name": "role",
-                "comment": "角色 [@dynamic: fuzzy @sortable @updatable: exact]",
+                "comment": "角色 [@options: admin=管理员 user=普通用户 guest=访客 @dynamic: fuzzy @sortable @updatable: exact]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -105,7 +105,7 @@
               },
               {
                 "name": "age",
-                "comment": "年龄 [@dynamic: exact, in, range @sortable @hideable @updatable: eq, range]",
+                "comment": "年龄 [@options: 0=未知 18=成年 65=退休 @order: -1 @dynamic: exact, in, range @sortable @hideable @updatable: eq, range]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -152,7 +152,7 @@
               },
               {
                 "name": "org_id",
-                "comment": "组织ID [@dynamic: exact, in @updatable: where]",
+                "comment": "组织ID [@desc: 所属组织的唯一标识 @dynamic: exact, in @updatable: where]",
                 "length": -1,
                 "table": {
                   "name": "users"

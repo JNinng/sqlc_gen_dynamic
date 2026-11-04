@@ -8,15 +8,15 @@
 //	table users: [@filter: deleted_at is_null]
 //	column users.id: [@dynamic: eq, neq, in, not_in @sortable @hideable]
 //	column users.name: [@dynamic: contains, prefix, suffix, eq, neq @sortable @hideable @updatable]
-//	column users.email: [@dynamic: eq, neq, in, not_in, prefix @hideable @updatable: set]
+//	column users.email: [@dynamic: eq, neq, in, not_in, prefix @hideable @updatable: set @label: 电子邮箱 @order: 10]
 //	column users.password: [@internal @updatable]
-//	column users.status: [@dynamic: eq, neq, in, not_in @sortable @hideable @updatable]
-//	column users.role: [@dynamic: contains, prefix, suffix @sortable @updatable: eq, neq]
-//	column users.age: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @hideable @updatable: eq, gt, gte, lt, lte, between]
+//	column users.status: [@dynamic: eq, neq, in, not_in @sortable @hideable @updatable @label: 用户状态 @desc: 账号的启用状态 @order: 10]
+//	column users.role: [@dynamic: contains, prefix, suffix @sortable @updatable: eq, neq @options: admin=管理员 user=普通用户 guest=访客]
+//	column users.age: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @hideable @updatable: eq, gt, gte, lt, lte, between @order: -1 @options: 0=未知 18=成年 65=退休]
 //	column users.score: [@dynamic: gt, gte, lt, lte, between @sortable @hideable @updatable: set]
 //	column users.balance: [@dynamic: gt, gte, lt, lte, between @sortable @hideable @updatable: set]
 //	column users.birth_date: [@dynamic: eq, gt, gte, lt, lte, between @hideable @updatable: false]
-//	column users.org_id: [@dynamic: eq, neq, in, not_in @updatable: where]
+//	column users.org_id: [@dynamic: eq, neq, in, not_in @updatable: where @desc: 所属组织的唯一标识]
 //	column users.tags: [@dynamic: in @hideable @updatable]
 //	column users.meta: [@dynamic: has @updatable: set]
 //	column users.created_at: [@dynamic: eq, neq, in, not_in, gt, gte, lt, lte, between @sortable @hideable]
@@ -67,13 +67,14 @@ var usersRegistry = dynq.TableMeta{
 		{
 			Key:        "email",
 			Column:     "email",
-			Label:      "用户邮箱，如 test@example.com",
+			Label:      "电子邮箱",
 			DataType:   dynq.DataTypeString,
 			Nullable:   false,
 			Ops:        []dynq.Op{dynq.OpEq, dynq.OpNeq, dynq.OpIn, dynq.OpNotIn, dynq.OpPrefix},
 			Sortable:   false,
 			Selectable: true,
 			Hidden:     false,
+			Order:      dynq.IntPtr(10),
 		},
 		{
 			Key:        "password",
@@ -88,7 +89,7 @@ var usersRegistry = dynq.TableMeta{
 		{
 			Key:        "status",
 			Column:     "status",
-			Label:      "状态 [已废弃，仅展示]",
+			Label:      "用户状态",
 			DataType:   dynq.DataTypeEnum,
 			Nullable:   false,
 			Ops:        []dynq.Op{dynq.OpEq, dynq.OpNeq, dynq.OpIn, dynq.OpNotIn},
@@ -97,6 +98,8 @@ var usersRegistry = dynq.TableMeta{
 			Hidden:     false,
 			Enum:       []string{"active", "inactive", "banned"},
 			Cast:       "::user_status",
+			Desc:       "账号的启用状态",
+			Order:      dynq.IntPtr(10),
 		},
 		{
 			Key:        "role",
@@ -108,6 +111,11 @@ var usersRegistry = dynq.TableMeta{
 			Sortable:   true,
 			Selectable: false,
 			Hidden:     false,
+			Options: []dynq.FieldOption{
+				{Value: "admin", Label: "管理员"},
+				{Value: "user", Label: "普通用户"},
+				{Value: "guest", Label: "访客"},
+			},
 		},
 		{
 			Key:        "age",
@@ -119,6 +127,12 @@ var usersRegistry = dynq.TableMeta{
 			Sortable:   true,
 			Selectable: true,
 			Hidden:     false,
+			Order:      dynq.IntPtr(-1),
+			Options: []dynq.FieldOption{
+				{Value: int64(0), Label: "未知"},
+				{Value: int64(18), Label: "成年"},
+				{Value: int64(65), Label: "退休"},
+			},
 		},
 		{
 			Key:        "score",
@@ -165,6 +179,7 @@ var usersRegistry = dynq.TableMeta{
 			Selectable: false,
 			Hidden:     false,
 			Cast:       "::uuid",
+			Desc:       "所属组织的唯一标识",
 		},
 		{
 			Key:        "tags",
@@ -1669,7 +1684,7 @@ func (UserTable) SetName(v string) UserUpdateOption {
 	}
 }
 
-// SetEmail 设置 email（用户邮箱，如 test@example.com）列值，无 nil。
+// SetEmail 设置 email（电子邮箱）列值，无 nil。
 func (UserTable) SetEmail(v string) UserUpdateOption {
 	return func(st *dynq.UpdateState[UserTable]) error {
 		return st.Set("email", "email", "", v)
@@ -1683,7 +1698,7 @@ func (UserTable) SetPassword(v string) UserUpdateOption {
 	}
 }
 
-// SetStatus 设置 status（状态 [已废弃，仅展示]）列值，无 nil。
+// SetStatus 设置 status（用户状态）列值，无 nil。
 func (UserTable) SetStatus(v UserStatus) UserUpdateOption {
 	return func(st *dynq.UpdateState[UserTable]) error {
 		return st.Set("status", "status", "::user_status", v)

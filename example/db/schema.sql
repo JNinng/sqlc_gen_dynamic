@@ -28,15 +28,15 @@ CREATE TABLE users (
 
 COMMENT ON COLUMN users.id         IS 'ID [@dynamic: exact, in @sortable @hideable]';
 COMMENT ON COLUMN users.name       IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable @updatable]';
-COMMENT ON COLUMN users.email      IS '用户邮箱，如 test@example.com [@dynamic: exact, in, prefix @hideable @updatable: set]';
+COMMENT ON COLUMN users.email      IS '用户邮箱，如 test@example.com [@label: 电子邮箱 @order: 10 @dynamic: exact, in, prefix @hideable @updatable: set]';
 COMMENT ON COLUMN users.password   IS '密码 [@internal @updatable]';
-COMMENT ON COLUMN users.status     IS '状态 [已废弃，仅展示] [@dynamic: exact, in @sortable @hideable @updatable]';
-COMMENT ON COLUMN users.role       IS '角色 [@dynamic: fuzzy @sortable @updatable: exact]';
-COMMENT ON COLUMN users.age        IS '年龄 [@dynamic: exact, in, range @sortable @hideable @updatable: eq, range]';
+COMMENT ON COLUMN users.status     IS '状态 [已废弃，仅展示] [@label: 用户状态 @desc: 账号的启用状态 @order: 10 @dynamic: exact, in @sortable @hideable @updatable]';
+COMMENT ON COLUMN users.role       IS '角色 [@options: admin=管理员 user=普通用户 guest=访客 @dynamic: fuzzy @sortable @updatable: exact]';
+COMMENT ON COLUMN users.age        IS '年龄 [@options: 0=未知 18=成年 65=退休 @order: -1 @dynamic: exact, in, range @sortable @hideable @updatable: eq, range]';
 COMMENT ON COLUMN users.score      IS '评分 [0-100] [@dynamic: range @sortable @hideable @updatable: set]';
 COMMENT ON COLUMN users.balance    IS '余额 [元] [@dynamic: range @sortable @hideable @updatable: set]';
 COMMENT ON COLUMN users.birth_date IS '生日 [@dynamic: eq, range @hideable @updatable: false]';
-COMMENT ON COLUMN users.org_id     IS '组织ID [@dynamic: exact, in @updatable: where]';
+COMMENT ON COLUMN users.org_id     IS '组织ID [@desc: 所属组织的唯一标识 @dynamic: exact, in @updatable: where]';
 COMMENT ON COLUMN users.tags       IS '标签 [@dynamic: in @hideable @updatable]';
 COMMENT ON COLUMN users.meta       IS '元数据 [@dynamic: has @updatable: set]';
 COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range @sortable @hideable]';

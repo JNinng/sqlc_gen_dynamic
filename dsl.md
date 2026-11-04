@@ -51,7 +51,7 @@ COMMENT ON COLUMN users.status IS '状态 [已废弃，仅展示] [@dynamic: exa
 | 指令块以 `@` 起始     | 进入指令解析                                                                                                                                                                                                                                |
 | 非指令块方括号         | 原样保留为 label                                                                                                                                                                                                                           |
 | 同列多指令块          | 按出现顺序合并;同名指令去重(等价于声明一次)                                                                                                                                                                                                               |
-| 指令名白名单          | 列级:`@dynamic` / `@sortable` / `@internal` / `@hideable` / `@updatable` / `@api`;表级:`@default_sort` / `@page` / `@pk` / `@update` / `@scope` / `@filter`。旧名 `@hidden` / `@selectable` 为兼容期别名(解析等价 + deprecation 提示,见 §2.7)。未知 `@xxx`(如 `@sortble` 手误) → 生成期 fail(fail 文案只列新名) |
+| 指令名白名单          | 列级:`@dynamic` / `@sortable` / `@internal` / `@hideable` / `@updatable` / `@api` / `@label` / `@desc` / `@order` / `@options`;表级:`@default_sort` / `@page` / `@pk` / `@update` / `@scope` / `@filter`。旧名 `@hidden` / `@selectable` 为兼容期别名(解析等价 + deprecation 提示,见 §2.7)。未知 `@xxx`(如 `@sortble` 手误) → 生成期 fail(fail 文案只列新名) |
 | 指令块内 payload    | `@name: payload` 形式,payload 可含空格(如 `created_at DESC`);遇到下一个 `@token` 结束                                                                                                                                                               |
 | 块内成对 `[ ]` 不终止块 | `@scope` 类型标记 `int[]` / `varchar[]` 的方括号被识别为成对,不误终止指令块                                                                                                                                                                                |
 
@@ -63,6 +63,18 @@ DSL 中的物理列名/表名按 catalog 实名书写(与 DDL 完全一致,含�
 - PG 保留字(order、group、user、check、like 等)与大小写敏感名等非常规名自动加双引号,产物 SQL 始终合法;
 - 错误文案、指令回显与逻辑键(camelCase)不受影响,始终用裸名;
 - 生成期不校验不拒绝——引号化对调用方透明,无需为保留字列名改 schema。
+
+### 1.4 payload 文本符号兼容矩阵
+
+指令 payload(如 `@label` / `@desc` 文案、`@options` 字典)的符号安全面:
+
+| 符号                     | 行为                                                                                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 全角标点(`：` `，` `、` `（）` 等) | **安全可用**。指令名只在首个 ASCII `:` 处切分,中文文案应统一用全角标点;`%` 与控制字符经 `%q` / JSON 编码安全转义。                                                                                                  |
+| ASCII 单引号 `'`          | 破坏 SQL `COMMENT` 字面量,**上游 sqlc 解析即失败、到不了插件**——插件层无需处理,payload 禁用单引号。                                                                                                       |
+| `@` 起始的词               | 被分词器识别为**新指令**。白名单外 → 生成期 fail(显式);白名单内(如文案误写 `@sortable`)→ **静默改变列能力**,描述文案中不得出现 `@` 起始的词。                                                                                 |
+| `[` `]` 方括号            | 参与指令块边界判定(深度计数)。**成对的**(如 `@desc: 数组[0]`)原样保留;未配对 `[` → unclosed fail;**裸 `]`** 会提前截断指令块、余下文本静默并入 label——插件侧不可检测,建议 payload 避免裸方括号。                                          |
+| 连续空格                   | 折叠为单个(既有分词行为)。                                                                                                                                                            |
 
 ## 2. 列级指令
 
@@ -333,6 +345,43 @@ COMMENT ON COLUMN users.password   IS '密码 [@internal @updatable]';
 - 生成文件头部的策略来源回显一律使用新名(旧名声明归一后回显为 `@internal` / `@hideable`)。
 
 **时间线**:别名兼容自旧名弃用起生效;**v0.6.0 移除旧名解析**,届时存量 DDL 若仍使用旧名将生成期 fail。建议在 v0.6.0 发布前完成 DDL 更名。
+
+### 2.8 展示注解(`@label` / `@desc` / `@order` / `@options`)
+
+**语法**
+
+```
+@label: <文本>
+@desc: <文本>
+@order: <整数>
+@options: <value>=<label> ...
+```
+
+**举例**
+
+```sql
+COMMENT ON COLUMN users.status IS '状态 [@label: 用户状态 @desc: 0：禁用、1：启用 @order: 10 @dynamic: exact, in @sortable]';
+COMMENT ON COLUMN users.role   IS '角色 [@options: admin=管理员 user=普通用户 @dynamic: fuzzy]';
+```
+
+**描述**
+
+四个注解**仅作用于前端 schema**(`dynq.FieldSchema` / `BuildSchema` 输出),不影响 SQL 与查询/更新能力的生成:
+
+- `@label` 显式指定前端 schema 的 `label`,**覆盖**注释自由文本(自由文本保留为人类注释);缺省时维持既有回退(自由文本 → 列名);
+- `@desc` 为前端 schema 增加字段描述(JSON 键 `desc`),适合枚举值释义、单位说明等;仅列级,无表级形态;
+- `@order` 指定字段在前端 schema `fields` 数组中的排序序号(可负、允许同号):已标注字段按序号升序排前,未标注字段保持 DDL 声明序殿后,同号按声明序稳定排序。仅影响 `BuildSchema` 输出顺序;registry 与协议校验保持 DDL 声明序;
+- `@options` 静态字典选项(`value`→`label` 对,空白分隔,供前端渲染下拉/多选控件),替代"再写一个 options 接口"的静态场景。动态场景(选项依赖上下文/权限、远程搜索)用 `@api`(§2.5),二者同列**互斥**。
+
+**定型与校验**:
+
+- `@options` 仅 `integer` / `uuid` / `string` 列(与 `@api` 同款白名单);value 按列 dataType 定型:integer → number(`int64`),string / uuid → string(uuid 不做格式约束);
+- 全部注解 payload 为空 → 生成期 fail;`@order` payload 非整数 → 生成期 fail;`@options` 某对缺 `=`、label 为空、value 与 dataType 类型不符、value 重复 → 生成期 fail;
+- 同列重复声明同名注解:取首条(与既有指令一致,等价于声明一次);
+- 与 `@internal` 同列组合 → **生成期告警**(非 fail):internal 列不进 schema,注解声明无效;告警随 deprecation 提示同一通道(stderr)输出,注明列位置。
+- `@label` 覆盖的 Label 同时用于生成 Set 方法的**文档注释**(`SetEmail 设置 email(电子邮箱)...`),属注释文本,不改变任何能力面。
+
+**payload 文本**:见 §1.4 符号兼容矩阵(中文文案统一用全角标点)。
 
 ## 3. 表级指令
 
@@ -659,6 +708,14 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | `@api` 类型非 `integer` / `uuid` / `string`                           | 生成期 fail                                                      |
 | `@api` 缺 `value_key` / `label_key` 或含未知参数或 `endpoint` 含 `?`        | 生成期 fail                                                      |
 | `@api` 与 `@internal` 组合                                            | 生成期 fail                                                      |
+| `@label` / `@desc` / `@order` payload 为空                            | 生成期 fail                                                      |
+| `@order` payload 非整数(`strconv.Atoi` 失败)                            | 生成期 fail                                                      |
+| `@options` 类型非 `integer` / `uuid` / `string`                       | 生成期 fail                                                      |
+| `@options` 某对缺 `=` / label 为空 / 零对                                  | 生成期 fail                                                      |
+| `@options` value 与 dataType 类型不符(integer 列非整数值)                    | 生成期 fail                                                      |
+| `@options` value 重复                                                 | 生成期 fail                                                      |
+| `@options` 与 `@api` 同列组合                                            | 生成期 fail(一个字段只有一种选项来源)                                        |
+| `@label` / `@desc` / `@order` / `@options` 与 `@internal` 组合          | **非 fail 生成期告警**(internal 列不进 schema,注解声明无效;stderr 注明列位置)      |
 | 无 `@pk` 且出现读侧指令(或经 `options.tables` 点名却既无读面也无更新面)            | 生成期 fail(无 `@pk` 的纯更新面合法:set-capable + where-capable 同时满足)            |
 | `@pk` 指向不存在 / 可空 / `@internal` / 游标不可编码类型(`jsonb` / 数组 / 不可映射)的列                        | 生成期 fail                                                      |
 | `@default_sort` 目标不存在 / 未 `@sortable` / `@internal` / 不可映射         | 生成期 fail                                                      |

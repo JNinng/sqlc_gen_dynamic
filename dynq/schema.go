@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 )
 
 // FieldAPI 是 @api 的选项数据源契约(字段级,前端消费)。
@@ -36,6 +37,11 @@ type FieldSchema struct {
 	Ops        []string  `json:"ops"`
 	Enum       []string  `json:"enum,omitempty"`
 	API        *FieldAPI `json:"api,omitempty"` // @api 声明:选项数据源为远程接口
+	// Desc 是字段描述(@desc 声明);omitempty 保证未声明的存量资源 schema
+	// 字节级不变(ETag hash 不漂移)。
+	Desc string `json:"desc,omitempty"`
+	// Options 是静态字典选项(@options 声明);omitempty 语义同 Desc。
+	Options []FieldOption `json:"options,omitempty"`
 }
 
 // inferAPIMode 推导 @api 的交互模式:显式声明优先;否则
@@ -76,6 +82,8 @@ type ResourceSchema struct {
 // 与 registry 由同一模板循环产出,再经 opts 做与 Parse 完全相同的减法投影:
 // where 禁用 → 该字段 op 集清空;sort 禁用 → sortable = false;select 禁用 →
 // hideable = false;字段被完全禁用(或原 @internal)则不出现在 schema 中。
+// @order 已标注字段按序号升序排到前面(@order 声明序号),未标注字段保持
+// 遍历序(= DDL 声明序)殿后,同号按声明序稳定排序。
 // 同一 opts 切片产出字节级相同的 schema(确定性纯函数)。
 func BuildSchema(meta TableMeta, cfg *QueryConfig) ResourceSchema {
 	s := ResourceSchema{
@@ -93,6 +101,13 @@ func BuildSchema(meta TableMeta, cfg *QueryConfig) ResourceSchema {
 	if s.DefaultSort == nil {
 		s.DefaultSort = []OrderBy{{Field: meta.Tiebreaker}}
 	}
+	// schemaField 是字段与其 @order 的排序载体:fields 与 order 必须同步
+	// 交换,平行双切片 + 按位置索引比较会在交换后错位。
+	type schemaField struct {
+		fs    FieldSchema
+		order *int
+	}
+	fields := []schemaField{}
 	for _, f := range meta.Fields {
 		if f.Hidden {
 			continue
@@ -106,6 +121,8 @@ func BuildSchema(meta TableMeta, cfg *QueryConfig) ResourceSchema {
 			Hideable:   f.Selectable,
 			Selectable: f.Selectable, // 过渡期旧键与 hideable 恒同值,见 FieldSchema
 			Enum:       f.Enum,
+			Desc:       f.Desc,
+			Options:    f.Options,
 		}
 		if cfg == nil || !cfg.WhereDisabled(f.Key) {
 			for _, op := range f.Ops {
@@ -130,10 +147,22 @@ func BuildSchema(meta TableMeta, cfg *QueryConfig) ResourceSchema {
 		if fs.Ops == nil {
 			fs.Ops = []string{}
 		}
-		s.Fields = append(s.Fields, fs)
+		fields = append(fields, schemaField{fs: fs, order: f.Order})
 	}
-	if s.Fields == nil {
-		s.Fields = []FieldSchema{}
+	// @order 投影:已标注升序在前,未标注殿后;SliceStable 保证同号与未标注
+	// 段维持声明序(确定性)。
+	sort.SliceStable(fields, func(i, j int) bool {
+		oi, oj := fields[i].order, fields[j].order
+		switch {
+		case oi == nil || oj == nil:
+			return oi != nil && oj == nil
+		default:
+			return *oi < *oj
+		}
+	})
+	s.Fields = make([]FieldSchema, len(fields))
+	for i, sf := range fields {
+		s.Fields[i] = sf.fs
 	}
 	return s
 }

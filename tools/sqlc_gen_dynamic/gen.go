@@ -35,14 +35,15 @@ func Generate(_ context.Context, req *pb.GenerateRequest) (*pb.GenerateResponse,
 	if err != nil {
 		return nil, err
 	}
-	tables, deprecations, err := buildTableSpecs(req, opts)
+	tables, notices, err := buildTableSpecs(req, opts)
 	if err != nil {
 		return nil, err
 	}
-	// 弃用旧指令名的生成期提示(stderr,不进 stdout——stdout 是 sqlc 协议通道)。
+	// 生成期告警(stderr,不进 stdout——stdout 是 sqlc 协议通道):弃用旧名
+	// 提示与注解无效告警,每条自带 "deprecation: "/"warning: " 分类前缀。
 	// 非 fail:旧名解析为等价能力,提示指向新名与计划移除版本,见 deprecatedDirectives。
-	for _, d := range deprecations {
-		fmt.Fprintf(os.Stderr, "sqlc_gen_dynamic: deprecation: %s\n", d)
+	for _, n := range notices {
+		fmt.Fprintf(os.Stderr, "sqlc_gen_dynamic: %s\n", n)
 	}
 	resp := &pb.GenerateResponse{}
 	for _, spec := range tables {
@@ -327,6 +328,28 @@ func (tc *tableCode) registrySection() string {
 			fmt.Fprintf(&b, "\t\t\t\tValueKey: %q,\n", c.API.ValueKey)
 			fmt.Fprintf(&b, "\t\t\t\tLabelKey: %q,\n", c.API.LabelKey)
 			fmt.Fprintf(&b, "\t\t\t\tMode:     %q,\n", c.API.Mode)
+			b.WriteString("\t\t\t},\n")
+		}
+		// 展示注解(@label 已并入 Label;@desc/@order/@options 按声明输出)。
+		if c.Desc != "" {
+			fmt.Fprintf(&b, "\t\t\tDesc:       %q,\n", c.Desc)
+		}
+		if c.Order != nil {
+			fmt.Fprintf(&b, "\t\t\tOrder:      dynq.IntPtr(%d),\n", *c.Order)
+		}
+		if len(c.Options) > 0 {
+			b.WriteString("\t\t\tOptions:    []dynq.FieldOption{\n")
+			for _, o := range c.Options {
+				switch v := o.Value.(type) {
+				case int64:
+					fmt.Fprintf(&b, "\t\t\t\t{Value: int64(%d), Label: %q},\n", v, o.Label)
+				case string:
+					fmt.Fprintf(&b, "\t\t\t\t{Value: %q, Label: %q},\n", v, o.Label)
+				default:
+					// 不可达:parseOptionsDirective 保证 value 仅 int64/string。
+					panic(fmt.Sprintf("column %s: unsupported @options value type %T", c.Physical, o.Value))
+				}
+			}
 			b.WriteString("\t\t\t},\n")
 		}
 		b.WriteString("\t\t},\n")

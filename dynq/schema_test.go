@@ -138,3 +138,120 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+// ---- 展示注解(@desc/@options/@order):schema 透传与排序 ----
+
+// TestBuildSchemaAnnotationPassthrough 验证 @desc / @options 透传与 omitempty:
+// 已声明字段输出 desc/options 键;未声明字段的 JSON 不含这两个键
+// (存量资源 schema 字节级不变,ETag hash 不漂移)。
+func TestBuildSchemaAnnotationPassthrough(t *testing.T) {
+	meta := TableMeta{
+		Resource: "users",
+		Fields: []FieldMeta{
+			{Key: "status", Column: "status", DataType: DataTypeInteger, Sortable: true,
+				Desc:    "0：禁用、1：启用",
+				Options: []FieldOption{{Value: int64(0), Label: "禁用"}, {Value: int64(1), Label: "启用"}}},
+			{Key: "name", Column: "name", DataType: DataTypeString, Sortable: true},
+		},
+		Tiebreaker:  "id",
+		PageDefault: 20,
+		PageMax:     100,
+	}
+	s := BuildSchema(meta, nil)
+	var annotated, plain FieldSchema
+	for _, f := range s.Fields {
+		switch f.Field {
+		case "status":
+			annotated = f
+		case "name":
+			plain = f
+		}
+	}
+	if annotated.Desc != "0：禁用、1：启用" {
+		t.Fatalf("desc passthrough: %q", annotated.Desc)
+	}
+	if len(annotated.Options) != 2 || annotated.Options[0].Value != int64(0) || annotated.Options[0].Label != "禁用" ||
+		annotated.Options[1].Value != int64(1) || annotated.Options[1].Label != "启用" {
+		t.Fatalf("options passthrough: %+v", annotated.Options)
+	}
+	if plain.Desc != "" || plain.Options != nil {
+		t.Fatalf("undeclared field must not carry annotations: %+v", plain)
+	}
+	// omitempty:未声明字段不得输出 desc/options 键(存量资源 schema 字节级
+	// 不变,ETag hash 不漂移);单独 marshal 避免 defaultSort 的 "desc"(bool)
+	// 干扰全 schema 文本匹配。
+	pb, err := json.Marshal(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsStr(string(pb), `"desc"`) || containsStr(string(pb), `"options"`) {
+		t.Fatalf("unset desc/options must be omitted: %s", pb)
+	}
+	// 已声明字段输出两键。
+	ab, err := json.Marshal(annotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsStr(string(ab), `"desc":"0：禁用、1：启用"`) {
+		t.Fatalf("desc must be emitted: %s", ab)
+	}
+	// FieldOption 的 JSON 形态锁定(前端契约)。
+	b, err := json.Marshal(annotated.Options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != `[{"value":0,"label":"禁用"},{"value":1,"label":"启用"}]` {
+		t.Fatalf("field option json form: %s", b)
+	}
+}
+
+// TestBuildSchemaOrderSorting 验证 @order 排序语义:已标注升序在前(@order: 0
+// 属已标注,与 nil 指针可区分)、同号按声明序稳定、未标注保持声明序殿后、
+// 负数合法、Hidden 字段不出现、hash 确定。
+func TestBuildSchemaOrderSorting(t *testing.T) {
+	n := func(v int) *int { return &v }
+	meta := TableMeta{
+		Resource: "users",
+		Fields: []FieldMeta{
+			{Key: "id", Column: "id", DataType: DataTypeInteger, Sortable: true},                    // 未标注,声明序殿后
+			{Key: "email", Column: "email", DataType: DataTypeString, Sortable: true, Order: n(10)}, // 与 status 同号,声明靠后
+			{Key: "status", Column: "status", DataType: DataTypeInteger, Sortable: true, Order: n(10)},
+			{Key: "age", Column: "age", DataType: DataTypeInteger, Sortable: true, Order: n(-1)},                       // 负数,排最前
+			{Key: "nickname", Column: "nickname", DataType: DataTypeString, Sortable: true, Order: n(0)},               // 0 属已标注,非 nil
+			{Key: "name", Column: "name", DataType: DataTypeString, Sortable: true},                                    // 未标注
+			{Key: "password", Column: "password", DataType: DataTypeString, Sortable: true, Order: n(5), Hidden: true}, // Hidden,不出现
+		},
+		Tiebreaker:  "id",
+		PageDefault: 20,
+		PageMax:     100,
+	}
+	s := BuildSchema(meta, nil)
+	var got []string
+	for _, f := range s.Fields {
+		if f.Field == "password" {
+			t.Fatal("hidden annotated field must not appear in schema")
+		}
+		got = append(got, f.Field)
+	}
+	want := []string{"age", "nickname", "email", "status", "id", "name"} // 同号 10:email 声明序在前
+	if len(got) != len(want) {
+		t.Fatalf("fields: %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order: got %v want %v", got, want)
+		}
+	}
+	// 排序不破坏确定性纯函数:同输入同 hash。
+	if s.Hash() != BuildSchema(meta, nil).Hash() {
+		t.Fatal("schema hash deterministic under @order sorting")
+	}
+	// 不同 @order 视图 hash 可区分。
+	unordered := meta
+	for i := range unordered.Fields {
+		unordered.Fields[i].Order = nil
+	}
+	if s.Hash() == BuildSchema(unordered, nil).Hash() {
+		t.Fatal("reordered schema must differ in hash")
+	}
+}

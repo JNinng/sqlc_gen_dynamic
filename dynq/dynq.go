@@ -87,6 +87,25 @@ type FieldMeta struct {
 	// API 非 nil 时,该字段 where 值控件的选项数据源为远程接口(@api 声明)。
 	// 仅影响前端 schema 输出(选项值动态获取),不参与任何服务端校验路径。
 	API *FieldAPI
+	// Desc 是字段描述(@desc 声明;空 = 未声明),仅进入前端 schema 输出。
+	Desc string
+	// Order 是前端 schema fields 数组的排序序号(@order 声明;nil = 未标注)。
+	// 仅影响 BuildSchema 的输出顺序:已标注字段按序号升序在前,未标注字段
+	// 保持 DDL 声明序殿后;registry 与协议校验保持 DDL 声明序。
+	Order *int
+	// Options 是静态字典选项(@options 声明;空 = 未声明),供前端渲染
+	// 下拉/多选控件;value 由生成器按列 dataType 定型为 number/string。
+	Options []FieldOption
+}
+
+// IntPtr 返回 v 的指针,registry 字面量 Order 字段的生成辅助。
+func IntPtr(v int) *int { return &v }
+
+// FieldOption 是 @options 的单个静态字典项,前端消费
+// (JSON {"value": ..., "label": ...};value 由生成器定型为 number/string)。
+type FieldOption struct {
+	Value any    `json:"value"`
+	Label string `json:"label"`
 }
 
 // HasOp 判断字段是否声明了该操作符。

@@ -215,7 +215,7 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
 
 ## 动态更新面(typed 门)
 
-> DSL 声明(`@updatable` 五形态、`@update` 载荷)与校验规则见 [dsl.md §2.6 / §3.6](./dsl.md);`@scope` 与写面的边界见 [scope.md](./scope.md)。
+> DSL 声明(`@updatable` 五形态、`@update` 载荷)与校验规则见 [dsl.md §2.3 / §3.6](./dsl.md);`@scope` 与写面的边界见 [scope.md](./scope.md)。
 
 固定形态的 `UPDATE` 由 sqlc 静态查询承担;本插件的更新面面向**列集不定的内部管理操作**:SET 白名单与 WHERE 定位条件都是编译期结构化选项,**协议面(JSON)不进入写面**——客户端可触达的更新仅限按 pk 点行改,条件批量只存在于内部调用方。
 

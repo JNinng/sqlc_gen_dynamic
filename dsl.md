@@ -51,7 +51,7 @@ COMMENT ON COLUMN users.status IS '状态 [已废弃，仅展示] [@dynamic: exa
 | 指令块以 `@` 起始     | 进入指令解析                                                                                                                                                                                                                                |
 | 非指令块方括号         | 原样保留为 label                                                                                                                                                                                                                           |
 | 同列多指令块          | 按出现顺序合并;同名指令去重(等价于声明一次)                                                                                                                                                                                                               |
-| 指令名白名单          | 列级:`@dynamic` / `@sortable` / `@internal` / `@hideable` / `@updatable` / `@api` / `@label` / `@desc` / `@order` / `@options`;表级:`@default_sort` / `@page` / `@pk` / `@update` / `@scope` / `@filter`。旧名 `@hidden` / `@selectable` 为兼容期别名(解析等价 + deprecation 提示,见 §2.7)。未知 `@xxx`(如 `@sortble` 手误) → 生成期 fail(fail 文案只列新名) |
+| 指令名白名单          | 列级:`@dynamic` / `@sortable` / `@updatable` / `@internal` / `@hideable` / `@api` / `@label` / `@desc` / `@order` / `@options`;表级:`@default_sort` / `@page` / `@pk` / `@update` / `@scope` / `@filter`。旧名 `@hidden` / `@selectable` 为兼容期别名(解析等价 + deprecation 提示,见 §2.8)。未知 `@xxx`(如 `@sortble` 手误) → 生成期 fail(fail 文案只列新名) |
 | 指令块内 payload    | `@name: payload` 形式,payload 可含空格(如 `created_at DESC`);遇到下一个 `@token` 结束                                                                                                                                                               |
 | 块内成对 `[ ]` 不终止块 | `@scope` 类型标记 `int[]` / `varchar[]` 的方括号被识别为成对,不误终止指令块                                                                                                                                                                                |
 
@@ -77,6 +77,8 @@ DSL 中的物理列名/表名按 catalog 实名书写(与 DDL 完全一致,含�
 | 连续空格                   | 折叠为单个(既有分词行为)。                                                                                                                                                            |
 
 ## 2. 列级指令
+
+节序:§2.1–§2.3 为能力声明(过滤 / 排序 / 更新面),§2.4 为协议可见性排除,§2.5–§2.7 作用于前端 schema(UI 显隐提示 / 选项数据源 / 展示注解,三者同域可组合),§2.8 为更名对照与弃用时间线。
 
 ### 2.1 `@dynamic`
 
@@ -156,117 +158,7 @@ COMMENT ON COLUMN users.created_at IS '创建时间 [@dynamic: exact, in, range 
 - 与 `@default_sort` 联动:表级 `@default_sort` 目标列必须已声明 `@sortable`;
 - 与 `@internal` 互斥(组合 → fail)。
 
-### 2.3 `@hideable`
-
-> 旧名 `@selectable` 为弃用别名:解析等价,生成期输出 deprecation 提示(见 §2.7)。
-
-**语法**
-
-```
-@hideable
-```
-
-(无 payload)
-
-**举例**
-
-```sql
-COMMENT ON COLUMN users.name IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable]';
-```
-
-**描述**
-
-纯 UI 提示:该列前端表格列头可渲染与显隐交互。
-
-**不参与服务端任何校验路径**——服务端允许写进 `fields` 的列 = 全部非 `@internal` 列,与 `@hideable` 无关。仅流入前端 schema 决定列头渲染。
-
-### 2.4 `@internal`
-
-> 旧名 `@hidden` 为弃用别名:解析等价,生成期输出 deprecation 提示(见 §2.7)。
-
-**语法**
-
-```
-@internal
-```
-
-(无 payload)
-
-**举例**
-
-```sql
--- 敏感字段:
-COMMENT ON COLUMN users.password IS '密码 [@internal]';
-
--- 权限守卫列:
-COMMENT ON COLUMN customers.owner_user_id IS '归属用户ID [@internal]';
-```
-
-**描述**
-
-全能力排除:该列不会被返回(不可写进 `fields`)、不可过滤、不可排序、不出现在 schema 输出中、不参与游标。只能通过 sqlc 的静态查询读到。
-
-- 与 `@dynamic` / `@sortable` / `@hideable` / `@api` 任一组合声明 → 生成期 fail;`@updatable` 例外——写能力与协议可见性正交,`@internal` + `@updatable` 合法(服务端可写、协议不可见,如 `password`);
-- `@pk` 列不可 `@internal`(主键必须始终出现在返回列中,并作为游标列);
-- 典型用途:权限守卫列(如 `owner_user_id`)、敏感字段(如 `password`)。
-
-### 2.5 `@api`
-
-**语法**
-
-```
-@api: <endpoint> value_key=<字段名> label_key=<字段名> [mode=<single|multi|search>]
-```
-
-**举例**
-
-```sql
--- mode 缺省,由 ops 推导(含 in → multi):
-COMMENT ON COLUMN orders.user_id IS '用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name]';
-
--- mode 显式声明:
-COMMENT ON COLUMN orders.user_id IS '用户ID [@api: /api/v1/users/options value_key=id label_key=name mode=multi]';
-```
-
-**描述**
-
-声明该引用字段的 where 值控件 options 来自远程接口(引用型 ID 选择器,如 `user_id` / `assignee_id`)。仅 `integer` / `uuid` / `string` 列可声明。
-
-| 参数          | 必填 | 说明                                                                                                               |
-| ----------- | -- | ---------------------------------------------------------------------------------------------------------------- |
-| `endpoint`  | 是  | 相对前端 baseURL 的路径;禁止含 `?` 查询串(参数由前端按协议拼)                                                                          |
-| `value_key` | 是  | items 响应中每项的顶层字段名,值类型与列 dataType 一致                                                                              |
-| `label_key` | 是  | items 响应中每项的顶层字段名,展示文本来源                                                                                         |
-| `mode`      | 否  | `single` / `multi` / `search`;缺省由 ops 推导(含 `in` → `multi`、含 `contains`/`prefix`/`suffix` → `search`、否则 `single`) |
-
-**mode 语义**:
-
-| mode     | 前端控件形态                                 | options 拉取请求参数                 |
-| -------- | -------------------------------------- | ------------------------------ |
-| `single` | 单选下拉(一次选 1 个值,选中值作为 where 的 `value`)   | `page` / `pageSize`            |
-| `multi`  | 多选下拉(一次选 N 个值,选中值数组作为 where 的 `value`) | `page` / `pageSize`            |
-| `search` | 搜索框(输入关键字 → 远程过滤 → 选中值)                | `page` / `pageSize` + `q`(关键字) |
-
-分页是选项接口的通用能力,与 mode 无关——任意 mode 均支持 `page` / `pageSize`;`search` 模式前端额外携带 `q` 关键字,由 options 接口按 `q` 过滤返回 items。
-
-**`search`** **模式详述**:
-
-`search` 适用于 options 候选量大(无法一次拉完)的引用字段——前端按用户输入的关键字远程过滤,选中后再作为 where 的 `value` 提交。
-
-- **触发方式**:显式声明 `mode=search`;或 ops 推导——列声明了 `contains` / `prefix` / `suffix`(即 `fuzzy` 预设)任一 op 时,缺省 `mode` 自动推导为 `search`(实现见 [dynq/schema.go inferAPIMode](./dynq/schema.go));
-- **请求参数**:`q`(关键字)+ `page` / `pageSize`(分页通用);
-- **响应信封**(全 mode 统一):`{"items": [{"<valueKey>": ..., "<labelKey>": ...}], "hasMore": false}`;`hasMore=true` 时前端携带 `page+1` 继续拉取;
-- **后端实现二选一**:
-  - **复用生成方法**:把 `q` 喂给该资源 `ListXxx` 的模糊匹配字段(如 `ListUsersParams{NameContains: q, Limit: pageSize}`),`items` = `Result.Items`(每行模型,字段名天然匹配 `valueKey` / `labelKey`);
-  - **独立 options 接口**(推荐生产使用:脱敏、限字段、缓存):在 `endpoint` 实现专门的 options handler,按 `q` 过滤后只返回 `valueKey` / `labelKey` 两个字段。
-- **与** **`multi`** **的区别**:`multi` 是一次拉取全部 options(可分页)供多选下拉;`search` 是按关键字远程过滤,每次只拉匹配项。`multi` 不携带 `q`,`search` 必携带 `q`。
-- **与** **`single`** **的区别**:`single` 控件形态是单选下拉,options 量小可一次拉完;`search` 控件形态是搜索框,options 量大需远程过滤。
-
-**校验**:与 `@internal` 组合、非 `integer` / `uuid` / `string` 列、缺 `value_key` 或 `label_key`、未知参数、`endpoint` 含 `?` 或首 token 是 `key=value`、`mode` 非法 → 生成期 fail。
-
-**`@api`** **是纯前端 schema 契约**:不参与服务端校验路径(ID 值仍走原有类型收敛与参数化)。完整契约(响应信封、mode 语义、翻页、复用生成方法的字段名匹配)见 [schema.md @api 契约](./schema.md#api-契约引用字段选项数据源)。
-
-### 2.6 `@updatable`
+### 2.3 `@updatable`
 
 **语法**
 
@@ -327,26 +219,117 @@ COMMENT ON COLUMN users.password   IS '密码 [@internal @updatable]';
 - `@scope` **不参与写面**:Update 不消费 Scope,权限由读取阶段保证(先查后改;TOCTOU 见 [scope.md](./scope.md));
 - 无任何 set-capable 列的表不生成更新面(只读表零声明即隐式退出);显式 `@update` 开启但零 set-capable 列 → 生成期 fail(死配置)。
 
-### 2.7 指令命名对照与弃用时间线
+### 2.4 `@internal`
 
-`@hidden` → `@internal`、`@selectable` → `@hideable` 为纯更名(能力语义不变),更名动机:旧名与既有域词错位——"hidden" 易被读成 schema 消失 / UI 显隐,而其语义是**服务端内部列(协议面全排除)**;"selectable" 恰是 `fields` 列选择域的既有词,而其语义是**列头显隐交互的 UI 提示**。
+> 旧名 `@hidden` 为弃用别名:解析等价,生成期输出 deprecation 提示(见 §2.8)。
 
-| 旧名(弃用)        | 新名(推荐)      | 语义               |
-| ------------- | ----------- | ---------------- |
-| `@hidden`     | `@internal` | 服务端内部列,协议面全排除    |
-| `@selectable` | `@hideable` | 列头可显隐交互(纯 UI 提示) |
+**语法**
 
-**兼容策略**(不破坏存量 DDL):
+```
+@internal
+```
 
-- 新旧指令名并存:旧名继续解析为**等价能力**(别名),同列新旧名并存时静默合并(不是冲突);
-- 旧名触发**生成期 deprecation 提示**(stderr,非 fail):`@hidden is deprecated, use @internal instead (the old name will be removed in v0.6.0)`,每列每个旧名至多一条;
-- 未知指令的 fail 文案只列新名——旧名可解析,但不应再写进新 DDL;
-- 前端 schema JSON 键同步双发:`hideable` 为主,`selectable` 旧键过渡期保留**同值**输出(公开契约,与前端约定切换后于大版本移除,见 [schema.md](./schema.md));
-- 生成文件头部的策略来源回显一律使用新名(旧名声明归一后回显为 `@internal` / `@hideable`)。
+(无 payload)
 
-**时间线**:别名兼容自旧名弃用起生效;**v0.6.0 移除旧名解析**,届时存量 DDL 若仍使用旧名将生成期 fail。建议在 v0.6.0 发布前完成 DDL 更名。
+**举例**
 
-### 2.8 展示注解(`@label` / `@desc` / `@order` / `@options`)
+```sql
+-- 敏感字段:
+COMMENT ON COLUMN users.password IS '密码 [@internal]';
+
+-- 权限守卫列:
+COMMENT ON COLUMN customers.owner_user_id IS '归属用户ID [@internal]';
+```
+
+**描述**
+
+全能力排除:该列不会被返回(不可写进 `fields`)、不可过滤、不可排序、不出现在 schema 输出中、不参与游标。只能通过 sqlc 的静态查询读到。
+
+- 与 `@dynamic` / `@sortable` / `@hideable` / `@api` 任一组合声明 → 生成期 fail;`@updatable` 例外——写能力与协议可见性正交,`@internal` + `@updatable` 合法(服务端可写、协议不可见,如 `password`);
+- `@pk` 列不可 `@internal`(主键必须始终出现在返回列中,并作为游标列);
+- 典型用途:权限守卫列(如 `owner_user_id`)、敏感字段(如 `password`)。
+
+### 2.5 `@hideable`
+
+> 旧名 `@selectable` 为弃用别名:解析等价,生成期输出 deprecation 提示(见 §2.8)。
+
+**语法**
+
+```
+@hideable
+```
+
+(无 payload)
+
+**举例**
+
+```sql
+COMMENT ON COLUMN users.name IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable]';
+```
+
+**描述**
+
+纯 UI 提示:该列前端表格列头可渲染与显隐交互。
+
+**不参与服务端任何校验路径**——服务端允许写进 `fields` 的列 = 全部非 `@internal` 列,与 `@hideable` 无关。仅流入前端 schema 决定列头渲染。
+
+### 2.6 `@api`
+
+**语法**
+
+```
+@api: <endpoint> value_key=<字段名> label_key=<字段名> [mode=<single|multi|search>]
+```
+
+**举例**
+
+```sql
+-- mode 缺省,由 ops 推导(含 in → multi):
+COMMENT ON COLUMN orders.user_id IS '用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name]';
+
+-- mode 显式声明:
+COMMENT ON COLUMN orders.user_id IS '用户ID [@api: /api/v1/users/options value_key=id label_key=name mode=multi]';
+```
+
+**描述**
+
+声明该引用字段的 where 值控件 options 来自远程接口(引用型 ID 选择器,如 `user_id` / `assignee_id`)。仅 `integer` / `uuid` / `string` 列可声明。
+
+| 参数          | 必填 | 说明                                                                                                               |
+| ----------- | -- | ---------------------------------------------------------------------------------------------------------------- |
+| `endpoint`  | 是  | 相对前端 baseURL 的路径;禁止含 `?` 查询串(参数由前端按协议拼)                                                                          |
+| `value_key` | 是  | items 响应中每项的顶层字段名,值类型与列 dataType 一致                                                                              |
+| `label_key` | 是  | items 响应中每项的顶层字段名,展示文本来源                                                                                         |
+| `mode`      | 否  | `single` / `multi` / `search`;缺省由 ops 推导(含 `in` → `multi`、含 `contains`/`prefix`/`suffix` → `search`、否则 `single`) |
+
+**mode 语义**:
+
+| mode     | 前端控件形态                                 | options 拉取请求参数                 |
+| -------- | -------------------------------------- | ------------------------------ |
+| `single` | 单选下拉(一次选 1 个值,选中值作为 where 的 `value`)   | `page` / `pageSize`            |
+| `multi`  | 多选下拉(一次选 N 个值,选中值数组作为 where 的 `value`) | `page` / `pageSize`            |
+| `search` | 搜索框(输入关键字 → 远程过滤 → 选中值)                | `page` / `pageSize` + `q`(关键字) |
+
+分页是选项接口的通用能力,与 mode 无关——任意 mode 均支持 `page` / `pageSize`;`search` 模式前端额外携带 `q` 关键字,由 options 接口按 `q` 过滤返回 items。
+
+**`search`** **模式详述**:
+
+`search` 适用于 options 候选量大(无法一次拉完)的引用字段——前端按用户输入的关键字远程过滤,选中后再作为 where 的 `value` 提交。
+
+- **触发方式**:显式声明 `mode=search`;或 ops 推导——列声明了 `contains` / `prefix` / `suffix`(即 `fuzzy` 预设)任一 op 时,缺省 `mode` 自动推导为 `search`(实现见 [dynq/schema.go inferAPIMode](./dynq/schema.go));
+- **请求参数**:`q`(关键字)+ `page` / `pageSize`(分页通用);
+- **响应信封**(全 mode 统一):`{"items": [{"<valueKey>": ..., "<labelKey>": ...}], "hasMore": false}`;`hasMore=true` 时前端携带 `page+1` 继续拉取;
+- **后端实现二选一**:
+  - **复用生成方法**:把 `q` 喂给该资源 `ListXxx` 的模糊匹配字段(如 `ListUsersParams{NameContains: q, Limit: pageSize}`),`items` = `Result.Items`(每行模型,字段名天然匹配 `valueKey` / `labelKey`);
+  - **独立 options 接口**(推荐生产使用:脱敏、限字段、缓存):在 `endpoint` 实现专门的 options handler,按 `q` 过滤后只返回 `valueKey` / `labelKey` 两个字段。
+- **与** **`multi`** **的区别**:`multi` 是一次拉取全部 options(可分页)供多选下拉;`search` 是按关键字远程过滤,每次只拉匹配项。`multi` 不携带 `q`,`search` 必携带 `q`。
+- **与** **`single`** **的区别**:`single` 控件形态是单选下拉,options 量小可一次拉完;`search` 控件形态是搜索框,options 量大需远程过滤。
+
+**校验**:与 `@internal` 组合、非 `integer` / `uuid` / `string` 列、缺 `value_key` 或 `label_key`、未知参数、`endpoint` 含 `?` 或首 token 是 `key=value`、`mode` 非法 → 生成期 fail。
+
+**`@api` 是纯前端 schema 契约**:不参与服务端校验路径(ID 值仍走原有类型收敛与参数化)。完整契约(响应信封、mode 语义、翻页、复用生成方法的字段名匹配)见 [schema.md @api 契约](./schema.md#api-契约引用字段选项数据源)。
+
+### 2.7 展示注解(`@label` / `@desc` / `@order` / `@options`)
 
 **语法**
 
@@ -371,7 +354,7 @@ COMMENT ON COLUMN users.role   IS '角色 [@options: admin=管理员 user=普通
 - `@label` 显式指定前端 schema 的 `label`,**覆盖**注释自由文本(自由文本保留为人类注释);缺省时维持既有回退(自由文本 → 列名);
 - `@desc` 为前端 schema 增加字段描述(JSON 键 `desc`),适合枚举值释义、单位说明等;仅列级,无表级形态;
 - `@order` 指定字段在前端 schema `fields` 数组中的排序序号(可负、允许同号):已标注字段按序号升序排前,未标注字段保持 DDL 声明序殿后,同号按声明序稳定排序。仅影响 `BuildSchema` 输出顺序;registry 与协议校验保持 DDL 声明序;
-- `@options` 静态字典选项(`value`→`label` 对,空白分隔,供前端渲染下拉/多选控件),替代"再写一个 options 接口"的静态场景。动态场景(选项依赖上下文/权限、远程搜索)用 `@api`(§2.5),二者同列**互斥**。
+- `@options` 静态字典选项(`value`→`label` 对,空白分隔,供前端渲染下拉/多选控件),替代"再写一个 options 接口"的静态场景。动态场景(选项依赖上下文/权限、远程搜索)用 `@api`(§2.6),二者同列**互斥**。
 
 **定型与校验**:
 
@@ -382,6 +365,25 @@ COMMENT ON COLUMN users.role   IS '角色 [@options: admin=管理员 user=普通
 - `@label` 覆盖的 Label 同时用于生成 Set 方法的**文档注释**(`SetEmail 设置 email(电子邮箱)...`),属注释文本,不改变任何能力面。
 
 **payload 文本**:见 §1.4 符号兼容矩阵(中文文案统一用全角标点)。
+
+### 2.8 指令命名对照与弃用时间线
+
+`@hidden` → `@internal`、`@selectable` → `@hideable` 为纯更名(能力语义不变),更名动机:旧名与既有域词错位——"hidden" 易被读成 schema 消失 / UI 显隐,而其语义是**服务端内部列(协议面全排除)**;"selectable" 恰是 `fields` 列选择域的既有词,而其语义是**列头显隐交互的 UI 提示**。
+
+| 旧名(弃用)        | 新名(推荐)      | 语义               |
+| ------------- | ----------- | ---------------- |
+| `@hidden`     | `@internal` | 服务端内部列,协议面全排除    |
+| `@selectable` | `@hideable` | 列头可显隐交互(纯 UI 提示) |
+
+**兼容策略**(不破坏存量 DDL):
+
+- 新旧指令名并存:旧名继续解析为**等价能力**(别名),同列新旧名并存时静默合并(不是冲突);
+- 旧名触发**生成期 deprecation 提示**(stderr,非 fail):`@hidden is deprecated, use @internal instead (the old name will be removed in v0.6.0)`,每列每个旧名至多一条;
+- 未知指令的 fail 文案只列新名——旧名可解析,但不应再写进新 DDL;
+- 前端 schema JSON 键同步双发:`hideable` 为主,`selectable` 旧键过渡期保留**同值**输出(公开契约,与前端约定切换后于大版本移除,见 [schema.md](./schema.md));
+- 生成文件头部的策略来源回显一律使用新名(旧名声明归一后回显为 `@internal` / `@hideable`)。
+
+**时间线**:别名兼容自旧名弃用起生效;**v0.6.0 移除旧名解析**,届时存量 DDL 若仍使用旧名将生成期 fail。建议在 v0.6.0 发布前完成 DDL 更名。
 
 ## 3. 表级指令
 
@@ -684,7 +686,7 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 | ------------------------------------------------------------------ | ------------------------------------------------------------- |
 | 注释 `[` 未闭合                                                         | 生成期 fail,定位到列                                                 |
 | 指令块内未知 `@xxx` 标签                                                   | 生成期 fail,定位到列与标签名                                             |
-| 弃用旧名 `@hidden` / `@selectable`                                     | **非 fail**:解析为等价新名 + 生成期 deprecation 提示(stderr,每列每个旧名至多一条,见 §2.7) |
+| 弃用旧名 `@hidden` / `@selectable`                                     | **非 fail**:解析为等价新名 + 生成期 deprecation 提示(stderr,每列每个旧名至多一条,见 §2.8) |
 | `@internal` 与 `@dynamic` / `@sortable` / `@hideable` / `@api` 任一组合 | 生成期 fail(`@updatable` 除外:写能力与协议可见性正交)                        |
 | `@updatable` 保留形态词与 op 项混写(如 `set, eq`)                         | 生成期 fail                                                      |
 | `@updatable` 显式 op 项既非预设也非已知 op                                   | 生成期 fail                                                      |

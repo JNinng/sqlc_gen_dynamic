@@ -3,8 +3,8 @@
 每张动态表生成 `UsersQuerySchema(opts ...dynq.QueryOption) dynq.ResourceSchema`,前端据此渲染通用 QueryBuilder——一次开发,全部列表页复用;端点级能力差异(禁用)对前端透明。
 
 - 查询入参契约、响应信封 → 见 [README](./README.md)
-- `@api` 指令的 DSL 语法与校验规则 → 见 [dsl.md §2.5](./dsl.md#25-api)
-- `@label` / `@desc` / `@order` / `@options` 展示注解 → 见 [dsl.md §2.8](./dsl.md#28-展示注解label--desc--order--options)
+- `@api` 指令的 DSL 语法与校验规则 → 见 [dsl.md §2.6](./dsl.md#26-api)
+- `@label` / `@desc` / `@order` / `@options` 展示注解 → 见 [dsl.md §2.7](./dsl.md#27-展示注解label--desc--order--options)
 - 设计原理与 UI 推断 → 见 [desc.md §10](./desc.md)
 
 - **交付端点**:`GET /{resource}/_query-schema`;`ResourceSchema.Hash()` 为内容 hash,可作 ETag 长缓存(同一 opts 切片产出字节级相同 schema)
@@ -91,7 +91,7 @@
 - **响应信封**(全资源统一):`{"items": [{"<valueKey>": ..., "<labelKey>": ...}], "hasMore": false}`;`hasMore=true` 时前端携带 `page+1` 继续拉取。两种实现均可:
   - 复用生成方法:`ListUsers(ctx, db, ListUsersParams{NameContains: q, Limit: pageSize})` → `items` 即 `Result.Items`(每行模型,字段名天然匹配 `valueKey`/`labelKey`);
   - 独立 options 接口(推荐生产使用:脱敏、限字段、缓存)。
-- `@api` 仅影响前端 schema 输出,不参与任何服务端校验路径(ID 值仍走原有类型收敛与参数化);DSL 校验规则与参数详情见 [dsl.md §2.5](./dsl.md)。
+- `@api` 仅影响前端 schema 输出,不参与任何服务端校验路径(ID 值仍走原有类型收敛与参数化);DSL 校验规则与参数详情见 [dsl.md §2.6](./dsl.md)。
 
 ## 示例(`UsersQuerySchema()` 节选)
 

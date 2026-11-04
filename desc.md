@@ -33,7 +33,7 @@ List 是 sqlc 社区常年 Top 需求，短期无法指望官方支持。
 
 - **固定形态查询与固定列集写路径**（GetBy / Create / Update / Delete / upsert / JOIN / CTE / 聚合）→ sqlc-gen-go 静态定义
 - **动态单表 List**（前端过滤、排序、分页、动态投影）→ 本插件生成
-- **动态单表更新**（列集不定的内部管理操作，typed 门、无 JSON 协议入口；后续迭代补齐）→ 本插件生成，见 dsl.md §2.6 / §3.6
+- **动态单表更新**（列集不定的内部管理操作，typed 门、无 JSON 协议入口；后续迭代补齐）→ 本插件生成，见 dsl.md §2.3 / §3.6
 - **SQL 拼装** → squirrel，使用收敛在生成物与 dynq 运行时内部，业务层不直接 import
 - **连接与事务** → 完全由 pgx 承担，生成代码经 DBTX 接口注入，自身无状态
 
@@ -56,7 +56,7 @@ List 是 sqlc 社区常年 Top 需求，短期无法指望官方支持。
    **非目标**
 
 - 跨表 JOIN、CTE、窗口函数的动态化（走 sqlc 静态查询或 Postgres VIEW 包装）。
-- 写路径的协议面动态化。动态 UPDATE 的 typed 门（`@updatable` / `@update`）覆盖列集不定的内部管理更新（后续迭代补齐，见 dsl.md §2.6 / §3.6），无 JSON 协议入口；INSERT / DELETE 的动态化仍是非目标。
+- 写路径的协议面动态化。动态 UPDATE 的 typed 门（`@updatable` / `@update`）覆盖列集不定的内部管理更新（后续迭代补齐，见 dsl.md §2.3 / §3.6），无 JSON 协议入口；INSERT / DELETE 的动态化仍是非目标。
 - **条件分组（OR / 嵌套组合）**：where 数组恒为 AND 语义，不支持 OR 与括号分组。需要 OR 的场景走 sqlc 静态查询。此为协议级约束，前端
   QueryBuilder 不提供分组 UI。
 - 反向游标（`before`）与游标化随机跳页——跳页仍由 offset 承担并受上限约束。

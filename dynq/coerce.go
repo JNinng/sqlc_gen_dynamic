@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -64,6 +65,23 @@ func AsInt64(v any) (int64, error) {
 	default:
 		return 0, coerceErr("expected integer number, got %s", typeOf(v))
 	}
+}
+
+// asCursorInt64 收敛整型游标值:只收 EncodeCursor 产出的十进制字符串并精确
+// 解析,与 AsDecimal 同构——游标值只能出自 EncodeCursor,数字形态必然意味着
+// 篡改或精度已损(float64 无法无损承载 >2^53 的整型主键);对前导 + 的宽容与
+// isDecimalLiteral 的「可选符号」一致,值语义不受影响。协议门(where 值)
+// 不经此函数,仍由 AsInt64 严格收敛。
+func asCursorInt64(v any) (int64, error) {
+	s, ok := v.(string)
+	if !ok {
+		return 0, coerceErr("expected integer string, got %s", typeOf(v))
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, coerceErr("invalid integer: %q", s)
+	}
+	return n, nil
 }
 
 // AsFloat64 收敛数值:JSON number 或 Go 原生数值类型,不收字符串数字。

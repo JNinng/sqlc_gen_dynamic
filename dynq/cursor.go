@@ -36,8 +36,10 @@ func fnv64a(s string) uint64 {
 	return h
 }
 
-// cursorPayload 是游标 JSON 载荷:f 为排序指纹的十进制字符串(用字符串编码,
-// 避免 JS 大整数精度问题),v 为按有效排序顺序排列的列值。
+// cursorPayload 是游标 JSON 载荷:f 为排序指纹的十进制字符串,v 为按有效排序
+// 顺序排列的列值。精确值一律字符串编码(指纹、整型、decimal),不依赖解码端
+// 配置,任何语言/解码器读载荷均不丢精度;裸 JSON 数字仅 float 列使用——Go 的
+// shortest-roundtrip 浮点编码保证其往返无损。
 type cursorPayload struct {
 	F string `json:"f"`
 	V []any  `json:"v"`
@@ -45,8 +47,10 @@ type cursorPayload struct {
 
 // EncodeCursor 编码不透明游标:base64url(JSON{f, v})。
 // 列值按有效排序的 dataType 格式化:datetime 为 RFC3339、date 为 YYYY-MM-DD、
-// number 的 NaN/±Inf 为字符串哨兵、decimal 为十进制字符串(NaN/±Inf 同哨兵)、
-// 其余原生 JSON;NULL(指针 nil / pgtype Valid=false)为 JSON null。
+// 整数为十进制字符串(>2^53 的整型经 JSON number 落 float64 即丢精度,雪花等
+// 大整型主键将不可翻页)、number 的 NaN/±Inf 为字符串哨兵、decimal 为十进制
+// 字符串(NaN/±Inf 同哨兵)、其余原生 JSON;NULL(指针 nil / pgtype Valid=false)
+// 为 JSON null。
 // 游标不签名:仅定位"调用方本就可发起的同一查询"的读取位置,不构成权限边界。
 func EncodeCursor(fp uint64, seq []SortField, vals []any) (string, error) {
 	if len(vals) != len(seq) {
@@ -154,28 +158,28 @@ func encodeCursorValue(dt DataType, v any) (any, error) {
 		}
 		return *v, nil
 	case int64:
-		return v, nil
+		return strconv.FormatInt(v, 10), nil
 	case *int64:
 		if v == nil {
 			return nil, nil
 		}
-		return *v, nil
+		return strconv.FormatInt(*v, 10), nil
 	case int32:
-		return int64(v), nil
+		return strconv.FormatInt(int64(v), 10), nil
 	case *int32:
 		if v == nil {
 			return nil, nil
 		}
-		return int64(*v), nil
+		return strconv.FormatInt(int64(*v), 10), nil
 	case int16: // smallint 的 sqlc 模型字段
-		return int64(v), nil
+		return strconv.FormatInt(int64(v), 10), nil
 	case *int16:
 		if v == nil {
 			return nil, nil
 		}
-		return int64(*v), nil
+		return strconv.FormatInt(int64(*v), 10), nil
 	case int:
-		return int64(v), nil
+		return strconv.FormatInt(int64(v), 10), nil
 	case float64:
 		return formatCursorNumber(v), nil
 	case *float64:
@@ -292,7 +296,7 @@ func decodeCursorValue(dt DataType, v any) (any, error) {
 	}
 	switch dt {
 	case DataTypeInteger:
-		return AsInt64(v)
+		return asCursorInt64(v)
 	case DataTypeNumber:
 		return decodeCursorNumber(v)
 	case DataTypeDecimal:

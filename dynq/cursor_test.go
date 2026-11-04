@@ -23,7 +23,19 @@ func TestCursorRoundtrip(t *testing.T) {
 		val  any
 	}{
 		{"integer", DataTypeInteger, int64(42)},
+		{"integer zero", DataTypeInteger, int64(0)},
+		{"integer negative", DataTypeInteger, int64(-42)},
+		{"integer 2^53", DataTypeInteger, int64(9007199254740992)},
+		{"integer 2^53+1", DataTypeInteger, int64(9007199254740993)},
+		{"integer snowflake", DataTypeInteger, int64(731254789012345678)},
+		{"integer max", DataTypeInteger, int64(math.MaxInt64)},
+		{"integer min", DataTypeInteger, int64(math.MinInt64)},
 		{"integer ptr", DataTypeInteger, ptr(int64(42))},
+		{"integer ptr big", DataTypeInteger, ptr(int64(9007199254740993))},
+		{"null int64", DataTypeInteger, (*int64)(nil)},
+		{"int32", DataTypeInteger, int32(math.MaxInt32)},
+		{"int32 min", DataTypeInteger, int32(math.MinInt32)},
+		{"null int32", DataTypeInteger, (*int32)(nil)},
 		{"int16", DataTypeInteger, int16(42)},
 		{"int16 ptr", DataTypeInteger, ptr(int16(42))},
 		{"null int16", DataTypeInteger, (*int16)(nil)},
@@ -76,8 +88,24 @@ func TestCursorRoundtrip(t *testing.T) {
 					t.Fatalf("float: %v vs %v", got, *want)
 				}
 			case *int64:
-				if got := vals[0].(int64); got != *want {
+				if want == nil {
+					if vals[0] != nil {
+						t.Fatalf("want nil, got %#v", vals[0])
+					}
+				} else if got := vals[0].(int64); got != *want {
 					t.Fatalf("int64 ptr: %v vs %v", got, *want)
+				}
+			case int32:
+				if got := vals[0].(int64); got != int64(want) {
+					t.Fatalf("int32: %v vs %v", got, want)
+				}
+			case *int32:
+				if want == nil {
+					if vals[0] != nil {
+						t.Fatalf("want nil, got %#v", vals[0])
+					}
+				} else if got := vals[0].(int64); got != int64(*want) {
+					t.Fatalf("int32 ptr: %v vs %v", got, *want)
 				}
 			case *int16:
 				if want == nil {
@@ -267,6 +295,100 @@ func TestCursorDecimalDecodeStrict(t *testing.T) {
 		if got := vals[0].(string); got != tc.want {
 			t.Fatalf("decode %s:\n got %q\nwant %q", tc.payload, got, tc.want)
 		}
+	}
+}
+
+// TestCursorIntegerDecodeStrict 覆盖整型游标解码的严格性:游标值只能出自
+// EncodeCursor 的十进制字符串形态,JSON number(旧格式或篡改)/小数字面量/
+// 指数形态/空白/超 int64 边界一律拒绝;合法字符串精确解析,含 int64 两端边界。
+func TestCursorIntegerDecodeStrict(t *testing.T) {
+	single := []SortField{{Key: "id", Column: "id", DataType: DataTypeInteger}}
+	fp := CursorFingerprint("u", single)
+	rawCursor := func(v string) string {
+		raw := `{"f":"` + strconv.FormatUint(fp, 10) + `","v":[` + v + `]}`
+		return base64.RawURLEncoding.EncodeToString([]byte(raw))
+	}
+
+	// 拒绝路径:Kind 恒为 cursor,Reason 区分"形态不符"与"字面量非法"。
+	for _, tc := range []struct{ payload, reason string }{
+		{`42`, "expected integer string"},               // JSON number 形态
+		{`9007199254740993`, "expected integer string"}, // 精度已损的裸数字
+		{`true`, "expected integer string"},
+		{`"1.5"`, "invalid integer"},  // 小数字面量
+		{`"1e10"`, "invalid integer"}, // 指数形态编码器不产出
+		{`""`, "invalid integer"},
+		{`" 42"`, "invalid integer"},                  // 空白
+		{`"9223372036854775808"`, "invalid integer"},  // 超 int64 上界
+		{`"-9223372036854775809"`, "invalid integer"}, // 超 int64 下界
+	} {
+		_, err := DecodeCursor(rawCursor(tc.payload), fp, single)
+		if err == nil {
+			t.Errorf("integer decode must reject payload %s", tc.payload)
+			continue
+		}
+		if e := AsError(err); e.Kind != KindCursor || !strings.Contains(e.Reason, tc.reason) {
+			t.Errorf("payload %s: kind/reason = %+v, want kind=cursor reason~%q", tc.payload, e, tc.reason)
+		}
+	}
+	for _, tc := range []struct {
+		payload string
+		want    int64
+	}{
+		{`"9223372036854775807"`, math.MaxInt64},
+		{`"-9223372036854775808"`, math.MinInt64},
+		{`"0"`, 0},
+		{`"-42"`, -42},
+		{`"731254789012345678"`, 731254789012345678},
+	} {
+		vals, err := DecodeCursor(rawCursor(tc.payload), fp, single)
+		if err != nil {
+			t.Fatalf("decode %s: %v", tc.payload, err)
+		}
+		if got := vals[0].(int64); got != tc.want {
+			t.Fatalf("decode %s: got %d, want %d", tc.payload, got, tc.want)
+		}
+	}
+}
+
+// TestCursorBigIDSeekChain 锁定大整型主键(>2^53,雪花/毫秒时间戳发号器量级)
+// 游标翻页的全链路精确性:encode → decode → seek 谓词参数必须携带精确 int64;
+// 任一环节落成 float64 即丢精度,续翻 seek 将错行。
+func TestCursorBigIDSeekChain(t *testing.T) {
+	seq := []SortField{
+		{Key: "createdAt", Column: "created_at", DataType: DataTypeDatetime, Desc: true},
+		{Key: "id", Column: "id", DataType: DataTypeInteger},
+	}
+	fp := CursorFingerprint("users", seq)
+	bigID := int64(731254789012345678)
+
+	cur, err := EncodeCursor(fp, seq, []any{mustTime(t, "2026-08-01T12:00:00+08:00"), bigID})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	vals, err := DecodeCursor(cur, fp, seq)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := vals[1].(int64); got != bigID {
+		t.Fatalf("big id roundtrip: got %d, want %d", got, bigID)
+	}
+	seek, err := SeekPredicate(seq, vals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql, args, err := seek.ToSql()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "((created_at < ?) OR (created_at = ? AND id > ?))"; sql != want {
+		t.Fatalf("seek sql:\n got %q\nwant %q", sql, want)
+	}
+	id, ok := args[2].(int64)
+	if !ok {
+		t.Fatalf("seek arg must be int64, got %T", args[2])
+	}
+	if id != bigID {
+		t.Fatalf("seek arg: got %d, want %d", id, bigID)
 	}
 }
 

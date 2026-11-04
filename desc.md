@@ -633,8 +633,9 @@ opts 禁用目标不在 registry 属编程错误：Parse / List / Count 返回 e
 - 信封类型定义（含 `includeTotal`）、严格解码（请求体上限 + 未知键拒绝 + 尾随数据拒绝）。
 - 操作符归一化（`NormalizeOrder`）、分页归一化（`NormalizePagination` / `CheckPagination`）、占位符预算与条件冲突检测辅助（`Budget` / `Slots`）。
 - `OrderBy` 结构、`FieldName` 类型。
-- **游标编解码**：`EncodeCursor` / `DecodeCursor`（base64url + JSON + FNV-64 指纹；指纹掺资源名；`f` 字符串编码；number 的
-  NaN/±Inf 哨兵编解码；列值复用类型收敛函数）。
+- **游标编解码**：`EncodeCursor` / `DecodeCursor`（base64url + JSON + FNV-64 指纹；指纹掺资源名；`f` 与整型/decimal 列值
+  字符串编码——精确值不落 JSON number，>2^53 的整型主键可翻页；number 的 NaN/±Inf 哨兵编解码；列值复用类型收敛函数，
+  整型走游标专用的字符串精确解析、不经 AsInt64 协议门）。
 - 各 dataType 的标量/切片类型收敛函数（`AsInt64` / `AsTime` / `AsEnum` / `AsInt64Slice` …）。
 - **`QueryOption` / `QueryConfig`**：三域禁用集合（where / sort / select），集合语义（幂等、交换、去重），`WhereDisabled` /
   `SortDisabled` / `SelectDisabled` 查询；禁用目标合法性由生成物对照 registry 校验。

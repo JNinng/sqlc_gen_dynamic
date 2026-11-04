@@ -35,7 +35,7 @@ type Query struct {
 // JSON 协议面统一小驼峰(接口交互契约)。
 type Condition struct {
 	Field      string `json:"field"`
-	Op         string `json:"op"`
+	Op         Op     `json:"op"`
 	Value      any    `json:"value"`
 	RightValue any    `json:"rightValue"`
 }

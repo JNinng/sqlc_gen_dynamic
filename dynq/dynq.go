@@ -54,10 +54,9 @@ var allOps = map[Op]struct{}{
 }
 
 // ParseOp 归一化操作符拼写,未知返回错误。
-func ParseOp(s string) (Op, error) {
-	op := Op(s)
+func ParseOp(op Op) (Op, error) {
 	if _, ok := allOps[op]; !ok {
-		return "", NewErr("", "", "unknown op: "+s, -1)
+		return "", NewErr("", "", "unknown op: "+string(op), -1)
 	}
 	return op, nil
 }

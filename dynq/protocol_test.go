@@ -234,6 +234,9 @@ func TestDecodeQuery(t *testing.T) {
 	if len(q.Fields) != 2 || len(q.Where) != 1 || len(q.Sort) != 1 {
 		t.Fatalf("q: %+v", q)
 	}
+	if q.Where[0].Op != OpContains {
+		t.Fatalf("op decoded as typed constant: %q", q.Where[0].Op)
+	}
 	if IncludeTotalOf(q.Pagination) {
 		t.Fatal("include_total should decode to false")
 	}

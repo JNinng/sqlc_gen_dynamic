@@ -1,6 +1,7 @@
 package dynq
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -94,5 +95,27 @@ func TestParseOp(t *testing.T) {
 	}
 	if _, err := ParseOp("=~"); err == nil {
 		t.Fatal("unknown op rejected")
+	}
+	// 未知操作符错误文案锁定(协议门回传给前端的文本)。
+	if _, err := ParseOp(Op("bogus")); err == nil {
+		t.Fatal("unknown op rejected")
+	} else if e := AsError(err); e.Reason != "unknown op: bogus" {
+		t.Fatalf("reason: %s", e.Reason)
+	}
+}
+
+// Condition_Op常量直接赋值_免string转换:Condition.Op 为 Op 类型后,调用方组装
+// 条件不再手写 string(...) 转换;该用例即编译面验收,并锁定 JSON 协议形态不变。
+func TestConditionOpDirectConstant(t *testing.T) {
+	c := Condition{Field: "name", Op: OpContains, Value: "al"}
+	if c.Op != OpContains {
+		t.Fatalf("op roundtrip: %q", c.Op)
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != `{"field":"name","op":"contains","value":"al","rightValue":null}` {
+		t.Fatalf("json form: %s", b)
 	}
 }

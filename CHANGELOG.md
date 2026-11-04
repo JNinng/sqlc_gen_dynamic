@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [v0.5.1] - 2026-11-04
+
+### 修复
+- **where 条件支持字符串形式的大整型主键**：此前整型列的 where 值只收 JSON number，前端按 protojson 的 int64-as-string 规范传字符串主键（>2^53，如雪花 id）被拒为 400，改传 JS number 则精度丢失、查询静默错位。现已修复——`eq`/`neq`/`in`/`not_in`/`between` 的整型值接受十进制字符串并精确解析，数字形态行为不变。
+
 ## [v0.5.0] - 2026-11-04
 
 ### 修复
@@ -26,6 +31,7 @@
   - `@options` 内联静态字典选项，前端可直接渲染下拉/多选控件，静态场景无需再写 options 接口；动态选项场景仍用 `@api`（二者同列互斥）。
 - **where 条件操作符常量**：组装 typed 条件时 `Condition.Op` 可直接赋值 `dynq` 操作符常量（如 `dynq.OpContains`），不再需要手写 `string(...)` 转换；JSON 协议形态不变。
 
-[Unreleased]: https://github.com/JNinng/sqlc_gen_dynamic/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/JNinng/sqlc_gen_dynamic/compare/v0.5.1...HEAD
+[v0.5.1]: https://github.com/JNinng/sqlc_gen_dynamic/compare/v0.5.0...v0.5.1
 [v0.5.0]: https://github.com/JNinng/sqlc_gen_dynamic/compare/v0.4.0...v0.5.0
 [v0.4.0]: https://github.com/JNinng/sqlc_gen_dynamic/compare/v0.3.0...v0.4.0

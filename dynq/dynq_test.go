@@ -28,8 +28,33 @@ func TestAsInt64(t *testing.T) {
 	if v, err := AsInt64(int(42)); err != nil || v != 42 {
 		t.Fatalf("int 42: %v %v", v, err)
 	}
-	if _, err := AsInt64("42"); err == nil {
-		t.Fatal("string number must be rejected")
+	// 十进制字符串(protojson 的 int64-as-string 无损口径):>2^53 的主键精确解析。
+	if v, err := AsInt64("42"); err != nil || v != 42 {
+		t.Fatalf(`"42": %v %v`, v, err)
+	}
+	if v, err := AsInt64("111453504381865828"); err != nil || v != 111453504381865828 {
+		t.Fatalf(`big id: %v %v`, v, err)
+	}
+	if v, err := AsInt64("0"); err != nil || v != 0 {
+		t.Fatalf(`"0": %v %v`, v, err)
+	}
+	if v, err := AsInt64("-42"); err != nil || v != -42 {
+		t.Fatalf(`"-42": %v %v`, v, err)
+	}
+	if v, err := AsInt64("+42"); err != nil || v != 42 {
+		t.Fatalf(`"+42": %v %v`, v, err)
+	}
+	if v, err := AsInt64("9223372036854775807"); err != nil || v != 9223372036854775807 {
+		t.Fatalf(`MaxInt64: %v %v`, v, err)
+	}
+	if v, err := AsInt64("-9223372036854775808"); err != nil || v != -9223372036854775808 {
+		t.Fatalf(`MinInt64: %v %v`, v, err)
+	}
+	// 非十进制整数字面量一律拒绝。
+	for _, s := range []string{"", "0x10", " 1 ", "1e3", "1.0", "9223372036854775808"} {
+		if _, err := AsInt64(s); err == nil {
+			t.Fatalf("invalid string %q must be rejected", s)
+		}
 	}
 	if _, err := AsInt64(1.5); err == nil {
 		t.Fatal("non-integer must be rejected")
@@ -129,8 +154,12 @@ func TestSlices(t *testing.T) {
 	if _, err := AsInt64Slice([]any{}); err == nil {
 		t.Fatal("empty array rejected")
 	}
-	if _, err := AsInt64Slice([]any{"1"}); err == nil {
-		t.Fatal("string element rejected")
+	// 字符串元素与数字元素同路径收敛(in/not_in/between 数组)。
+	if v, err := AsInt64Slice([]any{"1", "111453504381865828"}); err != nil || len(v) != 2 || v[1] != 111453504381865828 {
+		t.Fatalf("int slice: %v %v", v, err)
+	}
+	if _, err := AsInt64Slice([]any{"x"}); err == nil {
+		t.Fatal("non-numeric string element rejected")
 	}
 	if _, err := AsInt64Slice(3.14); err == nil {
 		t.Fatal("non-array rejected")

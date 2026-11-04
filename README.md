@@ -99,7 +99,7 @@ COMMENT ON TABLE  users          IS '用户表 [@default_sort: created_at DESC @
 | `fields` | 数组 | string | 逻辑字段名;缺省(nil)= 返回全部非 `@internal` 列;**显式空数组 `[]` 拒绝**(与缺省语义二分);重复去重保序;`@internal`/select 禁用字段拒绝 |
 | `where` | `field` | string | 逻辑字段名(大小写敏感白名单) |
 | `where` | `op` | string | 该字段能力集内(见 `_query-schema` 的 `fields[].ops`;操作符语义见 [dsl.md §4.4](./dsl.md#44-操作符语义)) |
-| `where` | `value` | any | 主比较值,严格类型收敛(integer 校验整数性、datetime 只收 RFC3339、date 只收 `YYYY-MM-DD`,不收字符串数字);`is_null`/`not_null` **禁止携带** |
+| `where` | `value` | any | 主比较值,严格类型收敛(integer 校验整数性,接受 JSON number **或十进制字符串**——protojson 的 int64-as-string 无损口径;datetime 只收 RFC3339、date 只收 `YYYY-MM-DD`,其余类型不收字符串数字);`is_null`/`not_null` **禁止携带** |
 | `where` | `rightValue` | any | 仅 `between` 使用且必填(左=value、右=rightValue,含两端) |
 | `sort` | `field` | string | 逻辑字段名;仅 `sortable=true` 字段,禁用字段拒绝 |
 | `sort` | `order` | string | `asc`/`desc` 大小写不敏感 |

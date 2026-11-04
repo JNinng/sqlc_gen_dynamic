@@ -355,6 +355,7 @@ Params 目标字段（含 `between` 拆分出的 Gte/Lte 与独立 `gte`/`lte` �
 ### 6.3 类型收敛（严格策略）
 
 - 数值只收 JSON number，且整数类型校验 float64 整数性；不收字符串数字。
+- **例外：integer 列的 where 值接受十进制字符串**（可选符号，精确 `ParseInt`）——>2^53 的 int64 主键经 JS number 传输必然精度已损（静默错位比 400 更危险），protojson 的 int64-as-string 是唯一无损口径；非十进制整数字面量（空串、`0x10`、`1e3`、`1.0`）一律拒绝。
 - datetime 只收 RFC3339 字符串；date 只收 `YYYY-MM-DD`。
 - 枚举只收白名单内字符串。
 - 数组逐元素收敛，单数组长度超 MaxIn 拒绝。

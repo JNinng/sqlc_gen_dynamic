@@ -10,10 +10,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// 类型收敛(严格策略,§6.3):数值只收 JSON number 且整数类型校验 float64 整数性,
-// 不收字符串数字;datetime 只收 RFC3339;date 只收 YYYY-MM-DD;枚举只收白名单内
-// 字符串;数组逐元素收敛。所有函数返回 *Error(Reason 已填,Kind/Index/Field 由
-// 调用方经 At 补充)。
+// 类型收敛(严格策略,§6.3):数值只收 JSON number 且整数类型校验 float64 整数性;
+// integer 额外收十进制字符串——protojson 对 int64 的无损口径即字符串,JSON number
+// 形态在 2^53 之外必然精度已损;datetime 只收 RFC3339;date 只收 YYYY-MM-DD;枚举
+// 只收白名单内字符串;数组逐元素收敛。所有函数返回 *Error(Reason 已填,Kind/
+// Index/Field 由调用方经 At 补充)。
 
 const nullValueHint = "value is null (use is_null / not_null ops instead)"
 
@@ -41,8 +42,11 @@ func typeOf(v any) string {
 	}
 }
 
-// AsInt64 收敛整数:JSON number(校验 float64 整数性)或 Go 原生整数类型;
-// 不收字符串数字。
+// AsInt64 收敛整数:JSON number(校验 float64 整数性)、Go 原生整数类型,或
+// 十进制字符串——where 值只能出自 JSON 反序列化,>2^53 的 int64 主键经 JS number
+// 传输必然精度已损(静默错位比 400 更危险),protojson 的无损口径是字符串;
+// 字符串形态只收十进制整数字面量(可选符号),精确 ParseInt,与 asCursorInt64
+// 同构,其余形态一律拒绝。
 func AsInt64(v any) (int64, error) {
 	if v == nil {
 		return 0, coerceErr(nullValueHint)
@@ -56,6 +60,12 @@ func AsInt64(v any) (int64, error) {
 			return 0, coerceErr("integer out of range: %v", n)
 		}
 		return int64(n), nil
+	case string:
+		i, err := strconv.ParseInt(n, 10, 64)
+		if err != nil {
+			return 0, coerceErr("invalid integer: %q", n)
+		}
+		return i, nil
 	case int:
 		return int64(n), nil
 	case int64:
@@ -69,9 +79,9 @@ func AsInt64(v any) (int64, error) {
 
 // asCursorInt64 收敛整型游标值:只收 EncodeCursor 产出的十进制字符串并精确
 // 解析,与 AsDecimal 同构——游标值只能出自 EncodeCursor,数字形态必然意味着
-// 篡改或精度已损(float64 无法无损承载 >2^53 的整型主键);对前导 + 的宽容与
-// isDecimalLiteral 的「可选符号」一致,值语义不受影响。协议门(where 值)
-// 不经此函数,仍由 AsInt64 严格收敛。
+// 篡改或精度已损(float64 无法无损承载 >2^53 的整型主键),故拒收一切数字
+// 形态;对前导 + 的宽容与 isDecimalLiteral 的「可选符号」一致,值语义不受
+// 影响。协议门(where 值)不经此函数,走 AsInt64——字符串与数字形态均收。
 func asCursorInt64(v any) (int64, error) {
 	s, ok := v.(string)
 	if !ok {

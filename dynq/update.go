@@ -66,6 +66,14 @@ func (s *UpdateState[T]) Where(field FieldName, op Op, cond sq.Sqlizer) error {
 	return nil
 }
 
+// Locate 注入一条内建定位条件(ReturningByPk 入口的主键等值):主键值本身是
+// 调用方输入的定位条件,计入调用方条件数(零 where 守卫天然满足),但不占
+// (字段, op) 槽位——与调用方 Where 方法(含同列 eq 的显式收窄)不冲突。
+// 注入次数由生成代码收敛为至多一条(单行入口的定位参数只有一个)。
+func (s *UpdateState[T]) Locate(cond sq.Sqlizer) {
+	s.wheres = append(s.wheres, cond)
+}
+
 // Sets 返回按调用序收集的赋值。
 func (s *UpdateState[T]) Sets() []SetAssign { return s.sets }
 
@@ -83,7 +91,8 @@ func (s *UpdateState[T]) FilterBypassed() bool { return s.bypassFilter }
 //
 // 零 where 按"调用方条件数"计:@filter 谓词恒定叠加后最终 SQL 的 WHERE
 // 恒非空,不豁免该守卫——不得以最终 SQL 形态代替判断,否则恒等不变量
-// 会让全表 UPDATE 静默成立。@scope 不参与写面,不在此计数。
+// 会让全表 UPDATE 静默成立。内建定位(ReturningByPk 的主键等值)与调用方
+// Where 选项同源计数。@scope 不参与写面,不在此计数。
 func (s *UpdateState[T]) Validate() error {
 	if len(s.sets) == 0 {
 		return NewErr(KindSet, "", "empty set: at least one column assignment is required", -1)

@@ -928,6 +928,109 @@ func UpdateCustomers(ctx context.Context, db DBTX, opts ...CustomerUpdateOption)
 	return tag.RowsAffected(), nil
 }
 
+// UpdateCustomersReturning 按 opts 收集的 SET / WHERE 组合更新行并返回被改写的
+// 整行:一条 SQL 完成 SET / WHERE / RETURNING,调用方无需更新后回查。
+// 命中几行返回几行;返回行序未定义(RETURNING 无 ORDER BY),不得做顺序
+// 假设;零命中返回空切片 + nil error。
+// 返回行语义:行值为 SET 表达式求值与 BEFORE 行级触发器改写后的新值
+// (未 SET 的列保留原值),AFTER 触发器对行的后续修改不回传。
+// SET 白名单、@filter 不变量(可 WithoutFilter 绕过)与零 SET / 零 WHERE
+// 守卫与 UpdateCustomers 一致;@scope 不参与写面,权限由读取阶段保证。
+//
+// 参数:
+//   - ctx: 更新上下文。
+//   - db:  数据库连接,满足 DBTX 接口即可。
+//   - opts: SET / WHERE 选项(CustomerUpdate.*),跨表选项编译期不可混用。
+//
+// 返回值:
+//   - []Customer: 被改写的整行,按命中返回;零命中为空切片。
+//   - error:    校验或执行失败时的错误。
+func UpdateCustomersReturning(ctx context.Context, db DBTX, opts ...CustomerUpdateOption) ([]Customer, error) {
+	st := dynq.NewUpdateState[CustomerTable]()
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(st); err != nil {
+			return nil, err
+		}
+	}
+	// 空 SET / 零 where 守卫:按调用方条件数计——@filter 叠加后最终 WHERE
+	// 恒非空,不得以最终 SQL 形态代替判断。
+	if err := st.Validate(); err != nil {
+		return nil, err
+	}
+	conds := make([]sq.Sqlizer, 0, len(st.Wheres()))
+	conds = append(conds, st.Wheres()...)
+	b := sq.Update("customers").PlaceholderFormat(sq.Dollar).Where(sq.And(conds))
+	for _, a := range st.Sets() {
+		b = b.Set(a.Column, sq.Expr("?"+a.Cast, a.Value))
+	}
+	b = b.Suffix("RETURNING id, name, amount_cents, owner_user_id, owner_dept_id, created_at, deleted_at")
+	query, args, err := b.ToSql()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByNameLax[Customer])
+}
+
+// UpdateCustomersReturningByPk 按 pk 定位更新单行并返回改写后的整行:一条 SQL
+// 完成 SET / WHERE / RETURNING,调用方无需更新后回查。
+// 主键作为必填定位参数内建到 WHERE(与 opts 条件 AND);动态 WHERE 不保证
+// 唯一,因此定位以参数承载——opts 条件是可选收窄,不再要求至少一条 Where。
+// 零命中返回 pgx.ErrNoRows。
+// 返回行语义:行值为 SET 表达式求值与 BEFORE 行级触发器改写后的新值
+// (未 SET 的列保留原值),AFTER 触发器对行的后续修改不回传。
+// SET 白名单、@filter 不变量(可 WithoutFilter 绕过)与零 SET 守卫与
+// UpdateCustomers 一致;@scope 不参与写面,权限由读取阶段保证。
+//
+// 参数:
+//   - ctx: 更新上下文。
+//   - db:  数据库连接,满足 DBTX 接口即可。
+//   - pk:  id 列的定位值(必填;零命中即未命中)。
+//   - opts: SET / WHERE 选项(CustomerUpdate.*),跨表选项编译期不可混用。
+//
+// 返回值:
+//   - Customer: 被改写的整行。
+//   - error: 校验或执行失败时的错误;零命中为 pgx.ErrNoRows。
+func UpdateCustomersReturningByPk(ctx context.Context, db DBTX, pk int64, opts ...CustomerUpdateOption) (Customer, error) {
+	st := dynq.NewUpdateState[CustomerTable]()
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(st); err != nil {
+			return Customer{}, err
+		}
+	}
+	// 主键定位内建:计入调用方条件数(Locate 不占槽位,可与 WhereIDEq
+	// 等显式收窄并存),零 where 守卫因此天然满足。
+	st.Locate(sq.Expr("id = ?", pk))
+	if err := st.Validate(); err != nil {
+		return Customer{}, err
+	}
+	conds := make([]sq.Sqlizer, 0, len(st.Wheres()))
+	conds = append(conds, st.Wheres()...)
+	b := sq.Update("customers").PlaceholderFormat(sq.Dollar).Where(sq.And(conds))
+	for _, a := range st.Sets() {
+		b = b.Set(a.Column, sq.Expr("?"+a.Cast, a.Value))
+	}
+	b = b.Suffix("RETURNING id, name, amount_cents, owner_user_id, owner_dept_id, created_at, deleted_at")
+	query, args, err := b.ToSql()
+	if err != nil {
+		return Customer{}, err
+	}
+	rows, err := db.Query(ctx, query, args...)
+	if err != nil {
+		return Customer{}, err
+	}
+	return pgx.CollectOneRow(rows, pgx.RowToStructByNameLax[Customer])
+}
+
 // CustomersQuerySchema 是前端契约出口:返回经 opts 减法投影后的有效能力全集,
 // 前端据此渲染查询组件。Schema 是(生成期元数据, opts)的确定性纯函数,
 // 同一 opts 产出字节级相同结果,内容 hash 可作 ETag;被禁用字段不出现于 schema。

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -236,8 +237,9 @@ func updateFuncBody(src, fn string) string {
 }
 
 // TestGenerateNoPkUpdateOnly 覆盖无 @pk 表的"无读面更新面":只含 marker /
-// Set / Where / UpdateXxx,不生成 registry / Params / Parse / List / Count /
-// Schema / 游标,且 import 不含 pgx。
+// Set / Where / UpdateXxx / UpdateXxxReturning(多行 RETURNING),不生成
+// registry / Params / Parse / List / Count / Schema / 游标与单行 ByPk 入口。
+// pgx 仅由 RETURNING 收行引用(CollectRows)。
 func TestGenerateNoPkUpdateOnly(t *testing.T) {
 	req := loadGoldenRequest(t)
 	resp, err := Generate(context.Background(), req)
@@ -252,6 +254,8 @@ func TestGenerateNoPkUpdateOnly(t *testing.T) {
 		"func (SysResourceGrantTable) WhereResourceEq(v string) SysResourceGrantUpdateOption",
 		"func (SysResourceGrantTable) WhereRecordIDBetween(lo, hi int64) SysResourceGrantUpdateOption",
 		"func UpdateSysResourceGrant(ctx context.Context, db DBTX, opts ...SysResourceGrantUpdateOption) (int64, error)",
+		"func UpdateSysResourceGrantReturning(ctx context.Context, db DBTX, opts ...SysResourceGrantUpdateOption) ([]SysResourceGrant, error)",
+		`pgx.CollectRows(rows, pgx.RowToStructByNameLax[SysResourceGrant])`,
 		`sq.Update("sys_resource_grant")`,
 		"本表无 @pk",
 	} {
@@ -260,9 +264,10 @@ func TestGenerateNoPkUpdateOnly(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
+		// 无 @pk 表不产出单行形态:动态 WHERE 不保证唯一,单行语义不成立。
+		"ReturningByPk", "CollectOneRow",
 		"Registry", "FieldIndex", "ListSysResourceGrant", "ParseSysResourceGrant",
 		"CountSysResourceGrant", "SysResourceGrantQuerySchema", "CursorValues",
-		`"github.com/jackc/pgx/v5"`,
 	} {
 		if strings.Contains(s, forbidden) {
 			t.Errorf("no-pk update surface must not contain %q", forbidden)
@@ -628,7 +633,8 @@ func TestGenerateNonNilSliceSet(t *testing.T) {
 }
 
 // TestGenerateModelImport 覆盖跨包 model_import:DBTX 与枚举类型带包限定,
-// 无 @pk 更新面同样引用 models.DBTX 且不引入 pgx。
+// RETURNING 入口的模型行同样带 models. 前缀;无 @pk 更新面只有多行形态,
+// pgx 仅由 RETURNING 收行引用。
 func TestGenerateModelImport(t *testing.T) {
 	req := loadGoldenRequest(t)
 	req.PluginOptions = []byte(`{
@@ -645,19 +651,29 @@ func TestGenerateModelImport(t *testing.T) {
 	for _, want := range []string{
 		`models "example/db/models"`,
 		"func UpdateUsers(ctx context.Context, db models.DBTX, opts ...UserUpdateOption) (int64, error)",
+		"func UpdateUsersReturning(ctx context.Context, db models.DBTX, opts ...UserUpdateOption) ([]models.User, error)",
+		"func UpdateUsersReturningByPk(ctx context.Context, db models.DBTX, pk int64, opts ...UserUpdateOption) (models.User, error)",
 		"func (UserTable) SetStatus(v models.UserStatus) UserUpdateOption",
 		"func (UserTable) WhereStatusIn(vs ...models.UserStatus) UserUpdateOption",
+		"pgx.CollectRows(rows, pgx.RowToStructByNameLax[models.User])",
+		"pgx.CollectOneRow(rows, pgx.RowToStructByNameLax[models.User])",
 	} {
 		if !strings.Contains(users, want) {
 			t.Errorf("users model-import surface missing %q", want)
 		}
 	}
 	grant := mustFile(t, resp, "sys_resource_grant_dynamic_gen.go")
-	if !strings.Contains(grant, "func UpdateSysResourceGrant(ctx context.Context, db models.DBTX") {
-		t.Error("no-pk update surface must use models.DBTX in model-import mode")
+	for _, want := range []string{
+		"func UpdateSysResourceGrant(ctx context.Context, db models.DBTX",
+		"func UpdateSysResourceGrantReturning(ctx context.Context, db models.DBTX, opts ...SysResourceGrantUpdateOption) ([]models.SysResourceGrant, error)",
+		"pgx.CollectRows(rows, pgx.RowToStructByNameLax[models.SysResourceGrant])",
+	} {
+		if !strings.Contains(grant, want) {
+			t.Errorf("no-pk model-import surface missing %q", want)
+		}
 	}
-	if strings.Contains(grant, `"github.com/jackc/pgx/v5"`) {
-		t.Error("no-pk update surface must not import pgx")
+	if strings.Contains(grant, "CollectOneRow") {
+		t.Error("no-pk update surface must not generate the single-row entry")
 	}
 }
 
@@ -717,5 +733,155 @@ func TestGenerateMarkerCollision(t *testing.T) {
 	_, err := Generate(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "collides with an sqlc model type") {
 		t.Fatalf("want marker collision error, got: %v", err)
+	}
+}
+
+// TestGenerateUpdateReturning 覆盖 RETURNING 入口的产出规则与 SQL 形态:
+// 多行形态产出给全部更新面表、单行形态只产出给有 @pk 的表(pk-only 无更新面
+// 表两者皆无)、RETURNING 列清单稳定(全列按 schema 声明序)、@filter 不变量
+// 同样叠加、零命中收行语义由 CollectRows / CollectOneRow 分型承载、主键定位
+// 内建(Locate)且 opts 条件为可选收窄。
+func TestGenerateUpdateReturning(t *testing.T) {
+	req := loadGoldenRequest(t)
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	src := map[string]string{}
+	for _, f := range resp.Files {
+		src[f.Name] = string(f.Contents)
+	}
+
+	// 多行形态:全部更新面表统一产出,签名 ([]<模型>, error)。
+	for _, table := range []string{"users", "orders", "sys_user", "sys_resource_grant", "customers", "projects"} {
+		file := src[table+"_dynamic_gen.go"]
+		if file == "" {
+			t.Fatalf("%s: generated file missing", table)
+		}
+		want := fmt.Sprintf("func Update%sReturning(ctx context.Context, db DBTX, opts ...", goName(table))
+		if !strings.Contains(file, want) {
+			t.Errorf("%s: multi-row RETURNING entry missing", table)
+		}
+	}
+	// 单行形态:仅有 @pk 的表;无 @pk 表(sys_resource_grant)不产出。
+	for _, table := range []string{"users", "orders", "sys_user", "customers", "projects"} {
+		file := src[table+"_dynamic_gen.go"]
+		if !strings.Contains(file, fmt.Sprintf("func Update%sReturningByPk(ctx context.Context, db DBTX, pk ", goName(table))) {
+			t.Errorf("%s: by-pk RETURNING entry missing", table)
+		}
+	}
+	grant := src["sys_resource_grant_dynamic_gen.go"]
+	if strings.Contains(grant, "ReturningByPk") || strings.Contains(grant, "CollectOneRow") {
+		t.Error("no-pk table must not generate the single-row RETURNING entry")
+	}
+
+	// RETURNING 列清单稳定:全列按 schema 声明序(字节级锁定在 golden 中,
+	// 此处锚定 users 的完整清单形态)。
+	users := src["users_dynamic_gen.go"]
+	wantSuffix := `b = b.Suffix("RETURNING id, name, email, password, status, role, age, score, balance, birth_date, org_id, tags, meta, created_at, updated_at, deleted_at")`
+	if !strings.Contains(users, wantSuffix) {
+		t.Error("users RETURNING column list unstable or incomplete")
+	}
+
+	// 多行入口:@filter 不变量与守卫同源;零命中 = CollectRows 空切片。
+	multi := updateFuncBody(users, "UpdateUsersReturning")
+	for _, want := range []string{
+		"if !st.FilterBypassed() {",
+		`conds = append(conds, sq.Expr("deleted_at IS NULL"))`,
+		"if err := st.Validate(); err != nil {",
+		"pgx.CollectRows(rows, pgx.RowToStructByNameLax[User])",
+	} {
+		if !strings.Contains(multi, want) {
+			t.Errorf("multi-row RETURNING body missing %q", want)
+		}
+	}
+	if strings.Contains(multi, "CollectOneRow") {
+		t.Error("multi-row entry must collect via CollectRows")
+	}
+
+	// 单行入口:主键定位内建(Locate 不占槽位)、@filter 仍生效、
+	// 零命中 = CollectOneRow → pgx.ErrNoRows。
+	byPk := updateFuncBody(users, "UpdateUsersReturningByPk")
+	for _, want := range []string{
+		`st.Locate(sq.Expr("id = ?", pk))`,
+		"if !st.FilterBypassed() {",
+		`conds = append(conds, sq.Expr("deleted_at IS NULL"))`,
+		"pgx.CollectOneRow(rows, pgx.RowToStructByNameLax[User])",
+	} {
+		if !strings.Contains(byPk, want) {
+			t.Errorf("by-pk RETURNING body missing %q", want)
+		}
+	}
+
+	// pk-only 表(audit_logs)无更新面,两个入口都不产出。
+	audit := src["audit_logs_dynamic_gen.go"]
+	if audit == "" {
+		t.Fatal("audit_logs: generated file missing")
+	}
+	if strings.Contains(audit, "Returning") {
+		t.Error("pk-only table without an update face must not generate RETURNING entries")
+	}
+}
+
+// TestGenerateEngineGate 覆盖方言门:产物绑定 PostgreSQL + pgx/v5,任何入选表
+// (含纯读面表)在非 postgresql 引擎下都生成期显式报错,engine 缺省从严;
+// postgresql 下的只读表照常产读面。
+func TestGenerateEngineGate(t *testing.T) {
+	const wantMsg = `is not supported (this plugin generates PostgreSQL dialect with pgx/v5 only)`
+
+	// mysql + 更新面:报错指向引擎与出路,不静默产出错误方言。
+	req := loadGoldenRequest(t)
+	req.Settings = &pb.Settings{Engine: "mysql"}
+	_, err := Generate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), `engine "mysql" `+wantMsg) {
+		t.Fatalf("want mysql dialect error, got: %v", err)
+	}
+
+	// engine 缺省(空)同样按非 postgresql 处理:显式报错优于静默错误方言。
+	req = loadGoldenRequest(t)
+	req.Settings = &pb.Settings{Engine: ""}
+	_, err = Generate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), `engine "" `+wantMsg) {
+		t.Fatalf("want empty-engine dialect error, got: %v", err)
+	}
+
+	// mysql + 纯读面表(零更新面):读面同样产 PG 方言($N 占位符 + pgx 收行),
+	// 门槛对读面一视同仁,不得静默放行。
+	req = loadGoldenRequest(t)
+	req.Settings = &pb.Settings{Engine: "mysql"}
+	req.PluginOptions = []byte(`{
+		"package": "gen",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"tables": ["users"]
+	}`)
+	users := findTable(req, "users")
+	for _, c := range users.Columns {
+		c.Comment = ""
+	}
+	users.Comment = "用户表 [@pk: id @update: false]"
+	_, err = Generate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), `engine "mysql" `+wantMsg) {
+		t.Fatalf("read-only table must be gated too, got: %v", err)
+	}
+
+	// postgresql + 同一只读表:正常产出读面(门只拦方言,不影响 PG 放行)。
+	req = loadGoldenRequest(t)
+	req.Settings = &pb.Settings{Engine: "postgresql"}
+	req.PluginOptions = []byte(`{
+		"package": "gen",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"tables": ["users"]
+	}`)
+	users = findTable(req, "users")
+	for _, c := range users.Columns {
+		c.Comment = ""
+	}
+	users.Comment = "用户表 [@pk: id @update: false]"
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate(read-only on postgresql): %v", err)
+	}
+	if !strings.Contains(mustFile(t, resp, "users_dynamic_gen.go"), "func ListUsers(") {
+		t.Error("read-only table must generate the read surface on postgresql")
 	}
 }

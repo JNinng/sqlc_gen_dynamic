@@ -1261,22 +1261,16 @@ func TestGoTypeOverrideAliasConflict(t *testing.T) {
 		}
 	})
 
-	t.Run("override_alias_pgx_accepted_in_update_only_file", func(t *testing.T) {
-		// sys_resource_grant 无 @pk(纯更新面):文件不 import pgx,别名 pgx
-		// 在该文件合法——锁定碰撞判定的文件作用域,不做全局超集拒绝。
+	t.Run("override_alias_pgx_rejected_in_update_only_file", func(t *testing.T) {
+		// 更新面统一产出 RETURNING 入口后,纯更新面文件同样固定 import pgx:
+		// 别名 pgx 在任何生成文件中都被占用。碰撞判定仍按文件作用域工作,
+		// 不做全局超集拒绝。
 		req := newReq(t, `
 			{"column": "sys_resource_grant.note", "go_type": {"import": "example.com/pgxshim", "package": "pgx", "type_name": "Conn"}}
 		`)
-		resp, err := Generate(context.Background(), req)
-		if err != nil {
-			t.Fatalf("Generate: %v", err)
-		}
-		grant := mustFile(t, resp, "sys_resource_grant_dynamic_gen.go")
-		if !strings.Contains(grant, `pgx "example.com/pgxshim"`) {
-			t.Error("update-only file must keep the pgx alias override")
-		}
-		if strings.Contains(grant, `"github.com/jackc/pgx/v5"`) {
-			t.Error("update-only file must not import pgx")
+		_, err := Generate(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), `alias "pgx" collides with the generated import "github.com/jackc/pgx/v5"`) {
+			t.Fatalf("want pgx collision error, got: %v", err)
 		}
 	})
 }

@@ -39,6 +39,16 @@ func Generate(_ context.Context, req *pb.GenerateRequest) (*pb.GenerateResponse,
 	if err != nil {
 		return nil, err
 	}
+	// 方言门:本插件产物绑定 PostgreSQL + pgx/v5——读面用 $N 占位符与 pgx 收行,
+	// 更新面另有 RETURNING,且 dynq 运行时依赖 pgtype。engine 非 postgresql 时
+	// 在生成期显式报错:读面与更新面同一门槛,不静默产出跑不起来的方言。
+	// sql_package 不进插件请求(见 Settings proto),无法二次校验,故文档写死
+	// pgx/v5 前置条件。
+	if engine := req.GetSettings().GetEngine(); engine != "postgresql" {
+		if len(tables) > 0 {
+			return nil, fmt.Errorf("table %s: engine %q is not supported (this plugin generates PostgreSQL dialect with pgx/v5 only); set engine: postgresql in sqlc.yaml", tables[0].Name, engine)
+		}
+	}
 	// 生成期告警(stderr,不进 stdout——stdout 是 sqlc 协议通道):弃用旧名
 	// 提示与注解无效告警,每条自带 "deprecation: "/"warning: " 分类前缀。
 	// 非 fail:旧名解析为等价能力,提示指向新名与计划移除版本,见 deprecatedDirectives。
@@ -186,7 +196,9 @@ func (tc *tableCode) importsSection() (string, error) {
 	if needTime {
 		fixedAliases["time"] = "time"
 	}
-	if spec.ReadEnabled {
+	// pgx 引用来源:读面收行(CollectRows)与更新面 RETURNING 收行(多行
+	// CollectRows / 单行 CollectOneRow)。
+	if spec.ReadEnabled || spec.UpdateEnabled {
 		fixedAliases["pgx"] = "github.com/jackc/pgx/v5"
 	}
 	if tc.opts.ModelImport != "" {
@@ -241,7 +253,7 @@ func (tc *tableCode) importsSection() (string, error) {
 		std = append(std, `"time"`)
 	}
 	rest = append(rest, `sq "github.com/Masterminds/squirrel"`)
-	if spec.ReadEnabled {
+	if spec.ReadEnabled || spec.UpdateEnabled {
 		rest = append(rest, `"github.com/jackc/pgx/v5"`)
 	}
 	if tc.opts.ModelImport != "" {

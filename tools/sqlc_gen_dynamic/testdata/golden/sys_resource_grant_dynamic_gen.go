@@ -14,6 +14,7 @@ import (
 	"context"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v5"
 	dynq "github.com/jninng/sqlc_gen_dynamic/dynq"
 )
 
@@ -292,4 +293,58 @@ func UpdateSysResourceGrant(ctx context.Context, db DBTX, opts ...SysResourceGra
 		return 0, err
 	}
 	return tag.RowsAffected(), nil
+}
+
+// UpdateSysResourceGrantReturning 按 opts 收集的 SET / WHERE 组合更新行并返回被改写的
+// 整行:一条 SQL 完成 SET / WHERE / RETURNING,调用方无需更新后回查。
+// 命中几行返回几行;返回行序未定义(RETURNING 无 ORDER BY),不得做顺序
+// 假设;零命中返回空切片 + nil error。
+// 返回行语义:行值为 SET 表达式求值与 BEFORE 行级触发器改写后的新值
+// (未 SET 的列保留原值),AFTER 触发器对行的后续修改不回传。
+// SET 白名单、@filter 不变量(可 WithoutFilter 绕过)与零 SET / 零 WHERE
+// 守卫与 UpdateSysResourceGrant 一致;@scope 不参与写面,权限由读取阶段保证。
+//
+// 本表无 @pk:零 where 守卫只保证"至少一个条件",条件可能命中多行——
+// 被改写行会全部返回;调用方必须自带唯一组合条件(如全部业务键列),
+// 否则会批量改写。
+//
+// 参数:
+//   - ctx: 更新上下文。
+//   - db:  数据库连接,满足 DBTX 接口即可。
+//   - opts: SET / WHERE 选项(SysResourceGrantUpdate.*),跨表选项编译期不可混用。
+//
+// 返回值:
+//   - []SysResourceGrant: 被改写的整行,按命中返回;零命中为空切片。
+//   - error:    校验或执行失败时的错误。
+func UpdateSysResourceGrantReturning(ctx context.Context, db DBTX, opts ...SysResourceGrantUpdateOption) ([]SysResourceGrant, error) {
+	st := dynq.NewUpdateState[SysResourceGrantTable]()
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(st); err != nil {
+			return nil, err
+		}
+	}
+	// 空 SET / 零 where 守卫:按调用方条件数计——@filter 叠加后最终 WHERE
+	// 恒非空,不得以最终 SQL 形态代替判断。
+	if err := st.Validate(); err != nil {
+		return nil, err
+	}
+	conds := make([]sq.Sqlizer, 0, len(st.Wheres()))
+	conds = append(conds, st.Wheres()...)
+	b := sq.Update("sys_resource_grant").PlaceholderFormat(sq.Dollar).Where(sq.And(conds))
+	for _, a := range st.Sets() {
+		b = b.Set(a.Column, sq.Expr("?"+a.Cast, a.Value))
+	}
+	b = b.Suffix("RETURNING resource, user_id, record_id, note")
+	query, args, err := b.ToSql()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByNameLax[SysResourceGrant])
 }

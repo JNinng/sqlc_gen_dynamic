@@ -2,7 +2,7 @@
 // 重建独立测试库 → 应用 schema.sql → 种子数据 → 跑一组动态查询 / 更新演示
 // (过滤 / 冲突拒绝 / 分页双模式 / 游标 / 窄投影 / opts 禁用 / schema /
 // 跨表游标互斥 / @scope 行级数据权限 / @scope in_any 数组三态 /
-// 动态更新面 typed 门)。
+// 动态更新面 typed 门 / 更新并返回整行)。
 //
 // 运行:go run ./example/db
 // 连接:默认 postgres://postgresql:root@localhost:5432/postgres(管理库),
@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -688,6 +689,39 @@ func demoUpdate(ctx context.Context, pool *pgxpool.Pool) {
 		gen.CustomerUpdate.WhereIDEq(1),
 	)
 	show("@scope 表 Update 无需 Scope(SetAmountCents × WhereIDEq(1))", n, err)
+
+	// ⑫ 更新并返回整行:一条 SQL 完成 SET / WHERE / RETURNING,无需更新后回查。
+	// 多行入口命中几行返回几行(行序未定义);单行入口按 pk 定位,零命中 ErrNoRows。
+	updated, rerr := gen.UpdateUsersReturning(ctx, pool,
+		gen.UserUpdate.SetRole(dynq.Ptr("returning")),
+		gen.UserUpdate.WhereIDIn(3, 4, 5),
+	)
+	if rerr != nil {
+		fmt.Printf("   多行 RETURNING → !! %v\n", rerr)
+	} else {
+		fmt.Printf("   多行 RETURNING WhereIDIn(3,4,5) × SetRole → %d 行\n", len(updated))
+		for _, u := range updated {
+			role := "NULL"
+			if u.Role != nil {
+				role = *u.Role
+			}
+			fmt.Printf("     返回行:id=%d name=%q role=%s\n", u.ID, u.Name, role)
+		}
+	}
+	if u, rerr := gen.UpdateUsersReturningByPk(ctx, pool, 1,
+		gen.UserUpdate.SetBalance(dynq.Ptr(666.6)),
+	); rerr != nil {
+		fmt.Printf("   单行 RETURNING → !! %v\n", rerr)
+	} else {
+		fmt.Printf("   单行 RETURNING pk=1 × SetBalance(666.6) → id=%d balance=%v\n", u.ID, u.Balance)
+	}
+	if _, rerr := gen.UpdateUsersReturningByPk(ctx, pool, 999999, gen.UserUpdate.SetName("ghost")); errors.Is(rerr, pgx.ErrNoRows) {
+		fmt.Printf("   单行 RETURNING pk=999999(不存在)→ pgx.ErrNoRows\n")
+	} else if rerr != nil {
+		fmt.Printf("   单行 RETURNING pk=999999 → !! %v\n", rerr)
+	} else {
+		fmt.Printf("   单行 RETURNING pk=999999 → !! 未返回 ErrNoRows(不应发生)\n")
+	}
 	fmt.Println()
 }
 

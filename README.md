@@ -6,6 +6,7 @@ sqlc 自定义 codegen 插件:从 DDL 注释 DSL 生成**动态单表 List 查�
 
 - Go 1.26.2+
 - sqlc ≥ v1.31(插件协议 `GenerateRequest` 自 v1.24 起)
+- **SQL 引擎 `postgresql` + Go 驱动 `pgx/v5`(硬前置)**:插件产物的 `$N` 占位符、`pgx.CollectRows` 收行、更新面 RETURNING 入口与 `dynq` 运行时的 `pgtype` 依赖均绑定该组合。非 `postgresql` 引擎(含 engine 缺省)在生成期显式报错,读面与更新面同一门槛;`sql_package` 不进插件协议(`GenerateRequest.Settings` 无此字段),插件无法二次校验,配成 `database/sql` 时产物会在 `go build` 期失败(`*sql.Rows` 不满足 `pgx.Rows`、`sql.Result.RowsAffected()` 双返回值),故按 `sql_package: "pgx/v5"` 配置。
 - 本地 PostgreSQL(仅演示 `go run ./example/db` 需要,测试套件无数据库依赖;演示自动重建独立测试库 `sqlc_gen_dynamic_test`,可用 `DYNQ_TEST_ADMIN_DSN` 覆盖管理连接)
 
 ## 执行命令
@@ -19,8 +20,8 @@ make sqlc
 # 全量测试:dynq 单测 + 插件 golden 测试(无数据库依赖;example 包随测编译)
 make test
 
-# 动态查询/更新演示:启动即重建测试库 → 应用 schema → 种子数据 → 跑 11 组演示
-# (过滤/冲突拒绝/offset 分页/游标翻页/少量字段选择/opts 禁用/schema/跨表游标互斥/@scope 行级数据权限/in_any 数组三态/动态更新面)
+# 动态查询/更新演示:启动即重建测试库 → 应用 schema → 种子数据 → 跑 12 组演示
+# (过滤/冲突拒绝/offset 分页/游标翻页/少量字段选择/opts 禁用/schema/跨表游标互斥/@scope 行级数据权限/in_any 数组三态/动态更新面/更新并返回整行)
 go run ./example/db
 
 # 生成后 git diff 锁 gen 目录,防 schema 漂移(CI 用固定版本 sqlc 执行)
@@ -223,6 +224,7 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
 | ----- | ------------------------------------------------- | ------------------------------ |
 | SET   | `@updatable` 的 set-capable 形态(`auto` / `set` / 显式清单) | `SetXxx` 选项方法                   |
 | WHERE | where-capable 形态(`auto` / `where` / 显式清单)+ `@pk` 自动定位矩阵 | `WhereXxx` 选项方法(`between` 拆占双槽) |
+| RETURNING | 全部更新面表;有 `@pk` 的表另产出单行形态 | `UpdateXxxReturning` / `UpdateXxxReturningByPk` |
 
 - **`@pk` 自动定位**:主键列无需声明 `@updatable`,自动获得完整类型矩阵的 Where 方法;主键永不生成 Set。
 - **无 `@pk` 表**:只生成更新面(header + marker + Set / Where + `UpdateXxx`),不生成 registry / Params / Parse / List / Count / Schema / 游标;入选要求 set-capable 与 where-capable 同时满足。零 where 守卫只保证"至少一个条件",**调用方必须自带唯一组合条件**(如全部业务键列),否则会批量改写。
@@ -233,6 +235,8 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
 - **`@internal` 正交**:`@internal` + `@updatable` 合法,Update 不读 `Hidden`(服务端可写、协议不可见)。
 - **命名冲突**:`<单数>Table` / `<单数>Update` / `<单数>UpdateOption` 与任一 sqlc 模型类型撞名时生成期 fail(同包共存);`UpdateXxx` 是包级函数,sqlc 静态查询是 `*Queries` 方法,同名可共存。
 - 返回 `(int64, error)`:n = 实际改写行数,0 = 未命中,不隐式特判。
+- **更新并返回(RETURNING)**:一条 SQL 完成 SET / WHERE / RETURNING,调用方无需更新后回查。基础入口为多行形态 `UpdateXxxReturning(ctx, db, opts...) ([]<模型>, error)`:命中几行返回几行,**行序未定义**(RETURNING 无 ORDER BY,不得做顺序假设),零命中 = 空切片 + nil error。有 `@pk` 的表按主键类型自动判断、额外产出单行形态 `UpdateXxxReturningByPk(ctx, db, pk, opts...) (<模型>, error)`:主键作为必填定位参数内建到 WHERE(与 opts 条件 AND,opts 是可选收窄,不再要求至少一条 Where),零命中 = `pgx.ErrNoRows`;无 `@pk` 的表不产出单行形态。是否产出由生成期按现有类型信息自动判断,不提供 opt-in 开关。
+- **RETURNING 返回行语义**:行值为 SET 表达式求值与 BEFORE 行级触发器改写后的新值(未 SET 的列保留原值,UPDATE 无默认值重算步骤),AFTER 触发器对行的后续修改不回传。RETURNING 只扩大读回:SET 白名单、`@filter` / `WithoutFilter`、零 SET / 零 WHERE 守卫、`@scope` 不参与写面均与 `UpdateXxx` 一致。方言由生成期统一校验:非 `postgresql` 引擎在生成期报错(读面与更新面同一门槛),不新增注解门控,见[环境要求](#环境要求)。
 - 已知限制:`where` 形态不能与显式 op 组合(不支持 `where, eq`);null op 不随 `auto` / `where` 自动授予;同列重复 `@updatable` 取首条。
 
 ```go
@@ -256,6 +260,15 @@ n, err = gen.UpdateUsers(ctx, db,
     gen.UserUpdate.WhereIDEq(2),
     gen.UserUpdate.WithoutFilter(),
 )
+
+// 更新并返回整行:多行形态(命中几行返回几行,行序未定义)
+users, err = gen.UpdateUsersReturning(ctx, db,
+    gen.UserUpdate.SetRole(dynq.Ptr("batch")),
+    gen.UserUpdate.WhereIDIn(3, 4, 5),
+)
+
+// 单行形态:pk 必填定位(opts 是可选收窄),零命中 pgx.ErrNoRows
+u, err = gen.UpdateUsersReturningByPk(ctx, db, 7, gen.UserUpdate.SetName("x"))
 ```
 
 ## 行级数据权限(@scope)

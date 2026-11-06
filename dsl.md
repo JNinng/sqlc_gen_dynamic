@@ -548,9 +548,10 @@ COMMENT ON TABLE customers IS '客户表 [@scope: ... @pk: id @update]';
 - 策略来源回显按声明原文(裸形态回显为 `@update`);
 - `@update: false` 与非 false 形态的 `@updatable` 共存 → 生成期 fail(死声明,防 DDL 漂移;主键列上的 `where` 惰性例外,见下);
 - 显式开启(`true` / `auto`)但零 set-capable 列 → 生成期 fail(死配置);
-- **无 `@pk` 表的更新面**:只生成 header + marker + Set / Where + `UpdateXxx`,不生成 registry / 参数 / 解析 / List / Count / Schema / 游标;入选要求 set-capable 与 where-capable **同时满足**。出现读侧指令(`@dynamic` / `@sortable` / `@hideable` / `@api` / `@scope` / `@default_sort` / `@page`)→ 生成期 fail(`@dynamic` 沿用 missing `@pk` 文案);
+- **无 `@pk` 表的更新面**:只生成 header + marker + Set / Where + `UpdateXxx` + `UpdateXxxReturning`(多行),不生成 registry / 参数 / 解析 / List / Count / Schema / 游标 / `UpdateXxxReturningByPk`;入选要求 set-capable 与 where-capable **同时满足**。出现读侧指令(`@dynamic` / `@sortable` / `@hideable` / `@api` / `@scope` / `@default_sort` / `@page`)→ 生成期 fail(`@dynamic` 沿用 missing `@pk` 文案);
 - 无 `@pk` 表的零 where 守卫只保证"至少一个条件",条件可能命中多行——**只适合调用方自带唯一组合条件**的场景;
 - `@scope` 不参与写面:Update 不取 Scope、不平移权限谓词;权限由读取阶段保证(先查后改,TOCTOU 见 [scope.md](./scope.md));
+- **更新并返回(RETURNING)入口**:`@update` 与 `@updatable` 不需要为此做任何声明——每张更新面表统一产出 `UpdateXxxReturning`(多行形态,返回 `([]<模型>, error)`),有 `@pk` 的表按主键类型自动判断、额外产出单行形态 `UpdateXxxReturningByPk`(主键必填定位,零命中 `pgx.ErrNoRows`;无 `@pk` 表不产出)。返回行语义与零命中语义见 [README §动态更新面](./README.md#动态更新面typed-门);方言门在生成期统一校验(非 `postgresql` 引擎报错,见 [README §环境要求](./README.md#环境要求))。`@update: false` 或无更新面的表两个入口都不产出;
 - `@update: false` 与 pk 上的 `@updatable: where` 并存合法:该声明对 pk 自动矩阵是惰性的(`false` 形态同样惰性),不构成死声明;
 - 更新面生成的包级符号 `<单数>Table` / `<单数>Update` / `<单数>UpdateOption` 与 sqlc 模型类型撞名时生成期 fail(同包共存,如 `user_table` 的模型 `UserTable` 会撞 `users` 的 marker);
 - `@filter` 不变量恒定 AND 进 UPDATE 的 WHERE;声明了 `@filter` 的表额外生成 `XxxUpdate.WithoutFilter()`(整表级绕过、幂等,不豁免零 where 守卫)。

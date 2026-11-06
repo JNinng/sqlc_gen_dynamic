@@ -104,7 +104,7 @@ dynq.DecodeQuery ──▶ ParseUsersQuery(q, opts...)   ListUsersParams{...}（
 ### 3.2 核心不变量
 
 1. **三投影同源**：协议校验白名单、typed Params、前端 schema 由同一份生成期元数据在同一模板循环中产出。同源性由构造保证，物理上不可能漂移。
-2. **生成代码为纯函数**：读面签名统一为 `(ctx, DBTX, params, opts...)`，更新面为 `(ctx, DBTX, opts...)`（SET / WHERE 载荷即选项）；不持有连接状态，无副作用。
+2. **生成代码为纯函数**：读面签名统一为 `(ctx, DBTX, params, opts...)`，更新面为 `(ctx, DBTX, opts...)`（SET / WHERE 载荷即选项；RETURNING 单行入口另带必填 pk 定位参数）；不持有连接状态，无副作用。
 3. **squirrel 边界**：仅出现在生成物与 dynq 运行时内部，业务层不直接 import；所有 builder 使用 `sq.Dollar` 占位符格式。
 4. **物理列名不外泄**：所有对外输入与输出（协议字段名、Params 字段、协议错误、前端
    schema、游标）只使用逻辑字段名（camelCase）与列值。snake_case 物理列名不是任何输入面的合法拼写。
@@ -890,7 +890,7 @@ example/                    # 示例与测试用独立工程
  ├── db/sqlc.yaml           # sqlc 配置（挂载本插件与 sqlc-gen-go）
  └── db/gen/                # 生成物目录
       ├── models.go         # sqlc-gen-go 产物（模型与固定查询示例）
-      └── users_dynamic_gen.go 等  # 本插件产物（每张动态表一份：registry / 字段常量 / Params / Parse / Schema / List / Count；含 set-capable `@updatable` 列时另含 typed 更新面 Update / Set / Where，无 `@pk` 表只产更新面）
+      └── users_dynamic_gen.go 等  # 本插件产物（每张动态表一份：registry / 字段常量 / Params / Parse / Schema / List / Count；含 set-capable `@updatable` 列时另含 typed 更新面 Update / Set / Where / UpdateXxxReturning / UpdateXxxReturningByPk（有 @pk 表），无 `@pk` 表只产更新面（多行 RETURNING））
 ```
 
 ---

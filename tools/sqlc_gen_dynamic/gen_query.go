@@ -51,21 +51,8 @@ func (c *ColumnSpec) whereCast() string {
 
 func (tc *tableCode) parseSection() string {
 	spec := tc.spec
-	var b strings.Builder
-	fmt.Fprintf(&b, "// Parse%sQuery 是协议门:将严格解码后的 JSON 查询信封转换为 typed 查询参数。\n", tc.res)
-	b.WriteString("// 解析过程为穷举 switch,零反射;排序回落与游标内容校验统一在查询函数执行。\n")
-	b.WriteString("//\n")
-	b.WriteString("// 参数:\n")
-	b.WriteString("//   - q:   查询信封,需先经 dynq.DecodeQuery 严格解码。\n")
-	b.WriteString("//   - opts: 运行期能力收窄选项;禁用目标不在 registry 时返回错误。\n")
-	b.WriteString("//\n")
-	b.WriteString("// 返回值:\n")
-	fmt.Fprintf(&b, "//   - List%sParams: 解析后的查询参数,可直接传给 List%s/Count%s。\n", tc.res, tc.res, tc.res)
-	b.WriteString("//   - error:          解析失败时的结构化错误(字段未知、op 越权、条件冲突、类型不符等)。\n")
-	fmt.Fprintf(&b, "func Parse%sQuery(q *dynq.Query, opts ...dynq.QueryOption) (List%sParams, error) {\n", tc.res, tc.res)
-	b.WriteString("\tcfg, err := dynq.NewQueryConfig(" + tc.reg + "Registry, opts...)\n")
-	b.WriteString("\tif err != nil {\n\t\treturn List" + tc.res + "Params{}, err\n\t}\n")
-	b.WriteString("\tvar out List" + tc.res + "Params\n")
+	var p printer
+	p.Raw(fill(parseQueryHead, "res", tc.res, "reg", tc.reg))
 	// slots 仅被携带 op 的列引用(每个 op case 都执行槽位占用);零 ops 表
 	// 不生成,避免悬空变量。
 	hasOps := false
@@ -76,71 +63,35 @@ func (tc *tableCode) parseSection() string {
 		}
 	}
 	if hasOps {
-		b.WriteString("\tslots := dynq.NewSlots()\n")
+		p.Line("\tslots := dynq.NewSlots()")
 	}
-	b.WriteString("\tbudget := dynq.NewBudget()\n\n")
-	// fields
-	b.WriteString("\t// 解析投影字段:显式空数组、@internal 字段、被禁用字段与未知字段均被拒绝;重复字段去重并保持顺序。\n")
-	fmt.Fprintf(&b, "\tselectFields, err := dynq.ParseSelectFields(q.Fields, cfg, %sRegistry)\n", tc.reg)
-	b.WriteString("\tif err != nil {\n\t\treturn out, err\n\t}\n")
-	b.WriteString("\tout.SelectFields = selectFields\n\n")
-	// where
-	b.WriteString("\t// 解析过滤条件:条件之间恒为 AND 语义;条件条数与占位符预算均受上限约束。\n")
-	b.WriteString("\tif len(q.Where) > dynq.MaxWhere {\n\t\treturn out, dynq.ErrTooManyConditions()\n\t}\n")
-	b.WriteString("\tfor i, c := range q.Where {\n")
-	fmt.Fprintf(&b, "\t\tidx, ok := %sFieldIndex[dynq.FieldName(c.Field)]\n", tc.reg)
-	b.WriteString("\t\tif !ok {\n\t\t\treturn out, dynq.NewErr(dynq.KindWhere, c.Field, \"unknown field\", i)\n\t\t}\n")
-	fmt.Fprintf(&b, "\t\tf := %sRegistry.Fields[idx]\n", tc.reg)
-	b.WriteString("\t\tif f.Hidden {\n\t\t\treturn out, dynq.NewErr(dynq.KindWhere, c.Field, \"field hidden\", i)\n\t\t}\n")
-	b.WriteString("\t\tif cfg.WhereDisabled(f.Key) {\n\t\t\treturn out, dynq.NewErr(dynq.KindWhere, c.Field, \"field disabled in this context\", i)\n\t\t}\n")
-	b.WriteString("\t\top, err := dynq.ParseOp(c.Op)\n")
-	b.WriteString("\t\tif err != nil {\n\t\t\treturn out, dynq.NewErr(dynq.KindWhere, c.Field, \"unknown op: \"+string(c.Op), i)\n\t\t}\n")
-	b.WriteString("\t\tif !f.HasOp(op) {\n\t\t\treturn out, dynq.NewErr(dynq.KindWhere, c.Field, \"op not allowed: \"+string(c.Op), i)\n\t\t}\n")
-	b.WriteString("\t\tif err := budget.Add(1); err != nil {\n\t\t\treturn out, dynq.AsError(err).At(dynq.KindWhere, i, c.Field)\n\t\t}\n")
-	b.WriteString("\t\tif op == dynq.OpIsNull || op == dynq.OpNotNull {\n")
-	b.WriteString("\t\t\tif c.Value != nil || c.RightValue != nil {\n\t\t\t\treturn out, dynq.NewErr(dynq.KindWhere, c.Field, \"is_null/not_null must not carry value or right_value\", i)\n\t\t\t}\n\t\t}\n")
-	b.WriteString("\t\tswitch f.Key {\n")
+	p.Raw(fill(parseQueryBody, "reg", tc.reg))
+
+	var cases printer
 	for _, c := range spec.Columns {
 		if len(c.Ops) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "\t\tcase %q:\n", c.Key)
-		b.WriteString("\t\t\tswitch op {\n")
+		cases.Linef("\t\tcase %q:", c.Key)
+		cases.Line("\t\t\tswitch op {")
 		for _, op := range orderedOps(c.Ops) {
-			b.WriteString(tc.parseOpCase(&c, op))
+			cases.Raw(tc.parseOpCase(&c, op))
 		}
-		b.WriteString("\t\t\t}\n")
+		cases.Line("\t\t\t}")
 	}
-	b.WriteString("\t\t}\n")
-	b.WriteString("\t}\n")
+	p.Raw(cases.String())
+
 	// is_null / not_null 互斥(跨条件)
+	var nulls printer
 	for _, c := range spec.Columns {
 		if c.HasOp("is_null") && c.HasOp("not_null") {
-			fmt.Fprintf(&b, "\tif out.%sIsNull && out.%sNotNull {\n", c.GoConst, c.GoConst)
-			fmt.Fprintf(&b, "\t\treturn out, dynq.NewErr(dynq.KindWhere, %q, \"is_null and not_null are mutually exclusive\", -1)\n\t}\n", c.Key)
+			nulls.Linef("\tif out.%sIsNull && out.%sNotNull {", c.GoConst, c.GoConst)
+			nulls.Linef("\t\treturn out, dynq.NewErr(dynq.KindWhere, %q, \"is_null and not_null are mutually exclusive\", -1)", c.Key)
+			nulls.Line("\t}")
 		}
 	}
-	// sort
-	b.WriteString("\n\t// 解析排序:字段须在注册表内且可排序;方向归一化为 asc/desc,并转为逻辑键。\n")
-	b.WriteString("\tfor i, s := range q.Sort {\n")
-	fmt.Fprintf(&b, "\t\tidx, ok := %sFieldIndex[dynq.FieldName(s.Field)]\n", tc.reg)
-	b.WriteString("\t\tif !ok {\n\t\t\treturn out, dynq.NewErr(dynq.KindSort, s.Field, \"unknown field\", i)\n\t\t}\n")
-	fmt.Fprintf(&b, "\t\tf := %sRegistry.Fields[idx]\n", tc.reg)
-	b.WriteString("\t\tif f.Hidden {\n\t\t\treturn out, dynq.NewErr(dynq.KindSort, s.Field, \"field hidden\", i)\n\t\t}\n")
-	b.WriteString("\t\tif !f.Sortable {\n\t\t\treturn out, dynq.NewErr(dynq.KindSort, s.Field, \"field not sortable\", i)\n\t\t}\n")
-	b.WriteString("\t\tif cfg.SortDisabled(f.Key) {\n\t\t\treturn out, dynq.NewErr(dynq.KindSort, s.Field, \"field disabled in this context\", i)\n\t\t}\n")
-	b.WriteString("\t\tdesc, err := dynq.NormalizeOrder(s.Order)\n")
-	b.WriteString("\t\tif err != nil {\n\t\t\treturn out, dynq.NewErr(dynq.KindSort, s.Field, \"invalid order: \"+s.Order, i)\n\t\t}\n")
-	b.WriteString("\t\tout.OrderBy = append(out.OrderBy, dynq.OrderBy{Field: f.Key, Desc: desc})\n")
-	b.WriteString("\t}\n")
-	// pagination
-	b.WriteString("\n\t// 解析分页:判定 offset/游标模式并归一化(page→Offset、pageSize→Limit)。\n")
-	fmt.Fprintf(&b, "\tlimit, offset, after, err := dynq.NormalizePagination(%sRegistry, q.Pagination)\n", tc.reg)
-	b.WriteString("\tif err != nil {\n\t\treturn out, err\n\t}\n")
-	b.WriteString("\tout.Limit, out.Offset, out.After = limit, offset, after\n")
-	b.WriteString("\treturn out, nil\n")
-	b.WriteString("}\n")
-	return b.String()
+	p.Raw(fill(parseQueryTail, "reg", tc.reg, "nullGuards", nulls.String()))
+	return p.String()
 }
 
 // ---- validateUsersParams(typed 门共享形态复核) ----
@@ -189,39 +140,29 @@ func (c *ColumnSpec) HasOp(op string) bool {
 
 func (tc *tableCode) validateSection() string {
 	spec := tc.spec
-	var b strings.Builder
-	fmt.Fprintf(&b, "// validate%sParams 校验 params 在当前 opts 下的合法性,List 与 Count 共用。\n", tc.res)
-	b.WriteString("// 禁用字段携带非零值、IsNull 与 NotNull 同时为真均显式报错,不做静默剔除")
+	scopeNote := "。"
 	if len(spec.Scope) > 0 {
-		b.WriteString(";\n// 声明 @scope 的资源缺省 Scope 时 fail-closed 报错。\n")
-	} else {
-		b.WriteString("。\n")
+		scopeNote = ";\n// 声明 @scope 的资源缺省 Scope 时 fail-closed 报错。"
 	}
-	b.WriteString("//\n")
-	b.WriteString("// 参数:\n")
-	b.WriteString("//   - params: 待复核的查询参数。\n")
-	b.WriteString("//   - cfg:    经 opts 投影后的运行期配置。\n")
-	b.WriteString("//\n")
-	b.WriteString("// 返回值:\n")
-	b.WriteString("//   - error: 复核通过返回 nil,否则返回结构化错误。\n")
-	fmt.Fprintf(&b, "func validate%sParams(params List%sParams, cfg *dynq.QueryConfig) error {\n", tc.res, tc.res)
+	var p printer
+	p.Raw(fill(validateHead, "res", tc.res, "scopeNote", scopeNote))
 	if len(spec.Scope) > 0 {
-		b.WriteString("\t// 数据权限 fail-closed:声明 @scope 的表缺省 Scope 时显式报错,\n")
-		b.WriteString("\t// 宁可拒绝服务也不静默退化为全量可见。\n")
-		b.WriteString("\tif params.Scope == nil {\n\t\treturn dynq.ErrScopeRequired()\n\t}\n")
+		p.Raw(validateScopeGuard)
 	}
 	for _, c := range spec.Columns {
 		exprs := paramRefExprs(&c)
 		if len(exprs) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "\tif cfg.WhereDisabled(%q) && (%s) {\n", c.Key, strings.Join(exprs, " || "))
-		fmt.Fprintf(&b, "\t\treturn dynq.NewErr(dynq.KindWhere, %q, \"field disabled in this context\", -1)\n\t}\n", c.Key)
+		p.Linef("\tif cfg.WhereDisabled(%q) && (%s) {", c.Key, strings.Join(exprs, " || "))
+		p.Linef("\t\treturn dynq.NewErr(dynq.KindWhere, %q, \"field disabled in this context\", -1)", c.Key)
+		p.Line("\t}")
 	}
 	for _, c := range spec.Columns {
 		if c.HasOp("is_null") && c.HasOp("not_null") {
-			fmt.Fprintf(&b, "\tif params.%sIsNull && params.%sNotNull {\n", c.GoConst, c.GoConst)
-			fmt.Fprintf(&b, "\t\treturn dynq.NewErr(dynq.KindWhere, %q, \"is_null and not_null are mutually exclusive\", -1)\n\t}\n", c.Key)
+			p.Linef("\tif params.%sIsNull && params.%sNotNull {", c.GoConst, c.GoConst)
+			p.Linef("\t\treturn dynq.NewErr(dynq.KindWhere, %q, \"is_null and not_null are mutually exclusive\", -1)", c.Key)
+			p.Line("\t}")
 		}
 	}
 	for _, c := range spec.Columns {
@@ -230,74 +171,67 @@ func (tc *tableCode) validateSection() string {
 		}
 		// 空 jsonb 定位值会生成 @> ''::jsonb 的运行期 PG 错误;协议门的 AsJSON
 		// 产不出空字节串,只有直接构造 Params 可达,仍显式拒绝。
-		fmt.Fprintf(&b, "\tif params.%sHas != nil && len(params.%sHas) == 0 {\n", c.GoConst, c.GoConst)
-		fmt.Fprintf(&b, "\t\treturn dynq.ErrEmptyJSON(%q)\n\t}\n", c.Key)
+		p.Linef("\tif params.%sHas != nil && len(params.%sHas) == 0 {", c.GoConst, c.GoConst)
+		p.Linef("\t\treturn dynq.ErrEmptyJSON(%q)", c.Key)
+		p.Line("\t}")
 	}
-	fmt.Fprintf(&b, "\treturn dynq.ValidateTypedSelectFields(params.SelectFields, cfg, %sRegistry)\n", tc.reg)
-	b.WriteString("}\n")
-	return b.String()
+	p.Raw(fill(validateTail, "reg", tc.reg))
+	return p.String()
 }
 
 // ---- buildUsersWhere(List/Count 唯一过滤事实源) ----
 
 func (tc *tableCode) whereSection() string {
 	spec := tc.spec
-	var b strings.Builder
-	fmt.Fprintf(&b, "// build%sWhere 构建过滤 WHERE 条件,List 与 Count 共用,过滤结果一致。\n", tc.res)
-	b.WriteString("// 所有值均经占位符参数化,列名与操作符为白名单字面量")
-	if len(spec.Filters) > 0 {
-		b.WriteString(";\n// 声明 @filter 的表头部附加服务端固定不变量(协议不可见、调用方不可控),\n// List 与 Count 共用,过滤视图天然一致")
-	}
-	if len(spec.Scope) > 0 {
-		b.WriteString(";\n// 声明 @scope 的表头部注入数据权限谓词(守卫函数名同为生成期白名单字面量),\n// 与业务条件 AND 组合,total 与 items 的权限视图天然一致\n")
-	} else {
-		b.WriteString("。\n")
-	}
-	b.WriteString("//\n")
-	b.WriteString("// 参数:\n")
-	b.WriteString("//   - params: 已通过 validate 形态复核的查询参数。\n")
-	b.WriteString("//\n")
-	b.WriteString("// 返回值:\n")
-	b.WriteString("//   - []sq.Sqlizer: 按 AND 语义组合的过滤条件列表。\n")
-	fmt.Fprintf(&b, "func build%sWhere(params List%sParams) []sq.Sqlizer {\n", tc.res, tc.res)
-	b.WriteString("\tvar conds []sq.Sqlizer\n")
+	var p printer
+	p.Raw(fill(whereHead, "res", tc.res, "notes", whereNotes(spec)))
 	if len(spec.Filters) > 0 {
 		// 服务端不变量(@filter):恒定过滤条件,先于 scope 谓词与业务条件。
-		b.WriteString("\t// 服务端固定不变量(@filter):生成期声明、协议不可见的恒定过滤条件,\n")
-		b.WriteString("\t// 与后续条件 AND;字面量经分词器校验后作为 Go 字面量经占位符传入,\n")
-		b.WriteString("\t// 不拼进 SQL 文本,零注入面。\n")
+		p.Raw(whereFilterHead)
 		for i := range spec.Filters {
-			fmt.Fprintf(&b, "\tconds = append(conds, %s)\n", tc.filterExpr(&spec.Filters[i]))
+			p.Linef("\tconds = append(conds, %s)", tc.filterExpr(&spec.Filters[i]))
 		}
 	}
 	if len(spec.Scope) > 0 {
-		b.WriteString("\t// 数据权限谓词(@scope):多守卫 OR 组合,与业务条件 AND;列名/操作符/\n")
-		b.WriteString("\t// 守卫函数名/字面量参数为生成期白名单字面量,标识符参数经占位符参数化;\n")
-		b.WriteString("\t// IN-子查询与不相关标量函数在单条语句内只求值一次;params.Scope 非 nil\n")
-		b.WriteString("\t// 已由 validate 保证。\n")
+		p.Raw(whereScopeHead)
 		exprs := make([]string, 0, len(spec.Scope))
 		for i := range spec.Scope {
 			exprs = append(exprs, tc.scopeGuardExpr(&spec.Scope[i]))
 		}
 		if len(exprs) == 1 {
-			fmt.Fprintf(&b, "\tconds = append(conds, %s)\n", exprs[0])
+			p.Linef("\tconds = append(conds, %s)", exprs[0])
 		} else {
-			b.WriteString("\tconds = append(conds, sq.Or{\n")
+			p.Line("\tconds = append(conds, sq.Or{")
 			for _, e := range exprs {
-				fmt.Fprintf(&b, "\t\t%s,\n", e)
+				p.Linef("\t\t%s,", e)
 			}
-			b.WriteString("\t})\n")
+			p.Line("\t})")
 		}
 	}
 	for _, c := range spec.Columns {
 		for _, op := range orderedOps(c.Ops) {
 			for _, line := range tc.whereCaseLines(&c, op) {
-				b.WriteString("\t" + line + "\n")
+				p.Line("\t" + line)
 			}
 		}
 	}
-	b.WriteString("\treturn conds\n}\n")
-	return b.String()
+	p.Raw(whereTail)
+	return p.String()
+}
+
+// whereNotes 生成 buildWhere 文档头里随声明形态变化的那句注解。
+func whereNotes(spec *TableSpec) string {
+	switch {
+	case len(spec.Filters) > 0 && len(spec.Scope) > 0:
+		return ";\n// 声明 @filter 的表头部附加服务端固定不变量(协议不可见、调用方不可控),\n// List 与 Count 共用,过滤视图天然一致" +
+			";\n// 声明 @scope 的表头部注入数据权限谓词(守卫函数名同为生成期白名单字面量),\n// 与业务条件 AND 组合,total 与 items 的权限视图天然一致"
+	case len(spec.Filters) > 0:
+		return ";\n// 声明 @filter 的表头部附加服务端固定不变量(协议不可见、调用方不可控),\n// List 与 Count 共用,过滤视图天然一致。"
+	case len(spec.Scope) > 0:
+		return ";\n// 声明 @scope 的表头部注入数据权限谓词(守卫函数名同为生成期白名单字面量),\n// 与业务条件 AND 组合,total 与 items 的权限视图天然一致"
+	default:
+		return "。"
+	}
 }
 
 // whereCaseLines 生成单个 (字段, op) 的 if-append 语句(单行)。

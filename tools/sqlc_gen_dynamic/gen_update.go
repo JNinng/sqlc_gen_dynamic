@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -38,68 +39,59 @@ func (tc *tableCode) updateSection() string {
 	if !tc.spec.UpdateEnabled {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(tc.updateMarkerSection())
-	b.WriteString(tc.updateSetSection())
-	b.WriteString(tc.updateWithoutFilterSection())
-	b.WriteString(tc.updateWhereSection())
-	b.WriteString(tc.updateFuncSection())
-	b.WriteString(tc.updateReturningSection())
-	return b.String()
+	var p printer
+	p.Raw(tc.updateMarkerSection())
+	p.Raw(tc.updateSetSection())
+	p.Raw(tc.updateWithoutFilterSection())
+	p.Raw(tc.updateWhereSection())
+	p.Raw(tc.updateFuncSection())
+	p.Raw(tc.updateReturningSection())
+	return p.String()
 }
 
 // ---- Table marker 与选项别名 ----
 
 func (tc *tableCode) updateMarkerSection() string {
-	sing := tc.spec.Singular
-	var b strings.Builder
-	fmt.Fprintf(&b, "// %sTable 是本表 Update 方法族的编译期 marker:选项类型按表绑定,\n", sing)
-	b.WriteString("// 跨表误用(SET / WHERE 选项串表)在编译期被拒绝,而不是运行期报错。\n")
-	fmt.Fprintf(&b, "type %sTable struct{}\n\n", sing)
-	fmt.Fprintf(&b, "// %sUpdate 是 Update 方法族的命名空间对象(如 %sUpdate.SetName)。\n", sing, sing)
-	b.WriteString("// 取 XxxUpdate 而非表名单数:与 sqlc-gen-go 同包时模型类型已占用单数名\n")
-	b.WriteString("// (如 sys_user → SysUser),命名空间对象不能复用。\n")
-	fmt.Fprintf(&b, "var %sUpdate %sTable\n\n", sing, sing)
-	fmt.Fprintf(&b, "// %sUpdateOption 是本表的更新选项别名。SET 资格面是列级 @updatable 的\n", sing)
-	b.WriteString("// set-capable 形态;WHERE 资格面是 where-capable 形态,有 @pk 时自动附带\n")
-	b.WriteString("// 主键列的完整类型矩阵(定位方法)。两个能力面与 @dynamic / @scope 解耦。\n")
-	fmt.Fprintf(&b, "type %sUpdateOption = dynq.UpdateOption[%sTable]\n\n", sing, sing)
-	return b.String()
+	var p printer
+	p.Raw(fill(updateMarkerSkel, "sing", tc.spec.Singular))
+	return p.String()
 }
 
 // ---- SET 方法族 ----
 
 func (tc *tableCode) updateSetSection() string {
 	sing := tc.spec.Singular
-	var b strings.Builder
-	b.WriteString("// ---- SET 白名单(set-capable @updatable 列;未调用的列保持原值)----\n\n")
+	var p printer
+	p.Raw(updateSetHead)
 	for _, c := range tc.spec.Updatables {
 		typ := c.GoType
 		if c.Nullable {
 			typ = "*" + c.GoType
 		}
-		if label := setCommentLabel(c); label != "" {
-			fmt.Fprintf(&b, "// Set%s 设置 %s（%s）列值", c.GoConst, c.Key, label)
-		} else {
-			fmt.Fprintf(&b, "// Set%s 设置 %s 列值", c.GoConst, c.Key)
-		}
+		nilTail := "，无 nil"
 		if c.Nullable {
-			b.WriteString("，nil = 显式置 NULL，字面量取指针用 dynq.Ptr")
-		} else {
-			b.WriteString("，无 nil")
+			nilTail = "，nil = 显式置 NULL，字面量取指针用 dynq.Ptr"
 		}
-		b.WriteString("。\n")
-		fmt.Fprintf(&b, "func (%sTable) Set%s(v %s) %sUpdateOption {\n", sing, c.GoConst, typ, sing)
-		fmt.Fprintf(&b, "\treturn func(st *dynq.UpdateState[%sTable]) error {\n", sing)
+		if label := setCommentLabel(c); label != "" {
+			p.Linef("// Set%s 设置 %s（%s）列值%s。", c.GoConst, c.Key, label, nilTail)
+		} else {
+			p.Linef("// Set%s 设置 %s 列值%s。", c.GoConst, c.Key, nilTail)
+		}
+		p.Linef("func (%sTable) Set%s(v %s) %sUpdateOption {", sing, c.GoConst, typ, sing)
+		p.Linef("\treturn func(st *dynq.UpdateState[%sTable]) error {", sing)
 		if !c.Nullable && strings.HasPrefix(c.GoType, "[]") {
 			// 切片类型的 nil 会编码为 NULL;非空列必须运行期拒绝,
 			// 使"非空列无 nil 通道"的签名承诺对切片同样成立。
-			fmt.Fprintf(&b, "\t\tif v == nil {\n\t\t\treturn dynq.ErrNilSet(%q)\n\t\t}\n", c.Key)
+			p.Linef("\t\tif v == nil {")
+			p.Linef("\t\t\treturn dynq.ErrNilSet(%q)", c.Key)
+			p.Line("\t\t}")
 		}
-		fmt.Fprintf(&b, "\t\treturn st.Set(%q, %q, %q, v)\n", c.Key, c.SQLName, c.whereCast())
-		b.WriteString("\t}\n}\n\n")
+		p.Linef("\t\treturn st.Set(%q, %q, %q, v)", c.Key, c.SQLName, c.whereCast())
+		p.Line("\t}")
+		p.Line("}")
+		p.Blank()
 	}
-	return b.String()
+	return p.String()
 }
 
 // setCommentLabel 提取注释的非指令部分(即列 label,如"姓名"):折叠空白,
@@ -118,15 +110,9 @@ func (tc *tableCode) updateWithoutFilterSection() string {
 	if len(tc.spec.Filters) == 0 {
 		return ""
 	}
-	sing := tc.spec.Singular
-	var b strings.Builder
-	b.WriteString("// ---- @filter 绕过 ----\n\n")
-	b.WriteString("// WithoutFilter 绕过本表的 @filter 不变量(幂等;不豁免零 where 守卫)。\n")
-	b.WriteString("// 典型用途:恢复被软删不变量挡住的历史行;绕过是整表级开关,不做条件细化。\n")
-	fmt.Fprintf(&b, "func (%sTable) WithoutFilter() %sUpdateOption {\n", sing, sing)
-	fmt.Fprintf(&b, "\treturn func(st *dynq.UpdateState[%sTable]) error {\n", sing)
-	b.WriteString("\t\tst.BypassFilter()\n\t\treturn nil\n\t}\n}\n\n")
-	return b.String()
+	var p printer
+	p.Raw(fill(withoutFilterSkel, "sing", tc.spec.Singular))
+	return p.String()
 }
 
 // ---- WHERE 定位方法族 ----
@@ -158,8 +144,8 @@ func (tc *tableCode) updateWhereFields() []updateWhereField {
 
 func (tc *tableCode) updateWhereSection() string {
 	sing := tc.spec.Singular
-	var b strings.Builder
-	b.WriteString("// ---- WHERE 定位方法族(@pk 自动矩阵 + where-capable @updatable)----\n\n")
+	var p printer
+	p.Raw(updateWhereHead)
 	for _, f := range tc.updateWhereFields() {
 		for _, op := range f.ops {
 			name := "Where" + f.col.GoConst + updateOpSuffix[op]
@@ -168,18 +154,16 @@ func (tc *tableCode) updateWhereSection() string {
 				// 数组列的 in 是 && 重叠语义,注释不能写 IN。
 				sqlDesc = "&& 重叠"
 			}
-			fmt.Fprintf(&b, "// %s 追加 %s 列 %s 条件;多条 WHERE 之间恒为 AND。\n",
-				name, f.col.Key, sqlDesc)
-			fmt.Fprintf(&b, "func (%sTable) %s(%s) %sUpdateOption {\n",
-				sing, name, updateWhereSignature(f.col, op), sing)
-			fmt.Fprintf(&b, "\treturn func(st *dynq.UpdateState[%sTable]) error {\n", sing)
-			for _, line := range strings.Split(strings.TrimRight(updateWhereBody(f.col, op), "\n"), "\n") {
-				b.WriteString("\t\t" + line + "\n")
-			}
-			b.WriteString("\t}\n}\n\n")
+			p.Linef("// %s 追加 %s 列 %s 条件;多条 WHERE 之间恒为 AND。", name, f.col.Key, sqlDesc)
+			p.Linef("func (%sTable) %s(%s) %sUpdateOption {", sing, name, updateWhereSignature(f.col, op), sing)
+			p.Linef("\treturn func(st *dynq.UpdateState[%sTable]) error {", sing)
+			p.Indented("\t\t", updateWhereBody(f.col, op))
+			p.Line("\t}")
+			p.Line("}")
+			p.Blank()
 		}
 	}
-	return b.String()
+	return p.String()
 }
 
 // updateWhereSignature 按 op 元数生成参数列表:
@@ -277,63 +261,48 @@ func updateWhereBody(c *ColumnSpec, op string) string {
 
 func (tc *tableCode) updateFuncSection() string {
 	spec := tc.spec
-	sing, res := spec.Singular, tc.res
-	table := tableNameQualified(spec.Name, tc.opts)
-	var b strings.Builder
-	fmt.Fprintf(&b, "// Update%s 按 opts 收集的 SET / WHERE 组合更新行,返回实际改写行数。\n", res)
-	b.WriteString("// SET 白名单与 WHERE 定位条件均来自列级 @updatable;有 @pk 时自动附带\n")
-	b.WriteString("// 主键列的定位方法(类型矩阵)。@scope 不参与写面,权限由读取阶段保证。\n")
-	b.WriteString("// 零 SET 或零调用方 WHERE 条件显式拒绝(Kind=set / where),不发全表 UPDATE,\n")
-	b.WriteString("// 也不静默 no-op。\n")
+	filterDoc := ""
 	if len(spec.Filters) > 0 {
-		b.WriteString("// @filter 不变量恒定 AND 进 WHERE;WithoutFilter() 可整体绕过,但不豁免\n")
-		b.WriteString("// 零 where 守卫。\n")
+		filterDoc = "// @filter 不变量恒定 AND 进 WHERE;WithoutFilter() 可整体绕过,但不豁免\n// 零 where 守卫。\n"
 	}
+	noPkDoc := ""
 	if !spec.ReadEnabled {
-		b.WriteString("//\n// 本表无 @pk:零 where 守卫只保证\"至少一个条件\",条件可能命中多行;\n")
-		b.WriteString("// 调用方必须自带唯一组合条件(如全部业务键列),否则会批量改写。\n")
+		noPkDoc = "//\n// 本表无 @pk:零 where 守卫只保证\"至少一个条件\",条件可能命中多行;\n// 调用方必须自带唯一组合条件(如全部业务键列),否则会批量改写。\n"
 	}
-	b.WriteString("//\n")
-	b.WriteString("// 参数:\n")
-	b.WriteString("//   - ctx: 更新上下文。\n")
-	b.WriteString("//   - db:  数据库连接,满足 DBTX 接口即可。\n")
-	fmt.Fprintf(&b, "//   - opts: SET / WHERE 选项(%sUpdate.*),跨表选项编译期不可混用。\n", sing)
-	b.WriteString("//\n")
-	b.WriteString("// 返回值:\n")
-	b.WriteString("//   - int64: 实际改写行数;0 = 未命中(条件不匹配),不隐式特判。\n")
-	b.WriteString("//   - error: 校验或执行失败时的错误。\n")
-	fmt.Fprintf(&b, "func Update%s(ctx context.Context, db %s, opts ...%sUpdateOption) (int64, error) {\n", res, tc.dbtx, sing)
-	fmt.Fprintf(&b, "\tst := dynq.NewUpdateState[%sTable]()\n", sing)
-	b.WriteString("\tfor _, opt := range opts {\n")
-	b.WriteString("\t\tif opt == nil {\n\t\t\tcontinue\n\t\t}\n")
-	b.WriteString("\t\tif err := opt(st); err != nil {\n\t\t\treturn 0, err\n\t\t}\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\t// 空 SET / 零 where 守卫:按调用方条件数计——@filter 叠加后最终 WHERE\n")
-	b.WriteString("\t// 恒非空,不得以最终 SQL 形态代替判断。\n")
-	b.WriteString("\tif err := st.Validate(); err != nil {\n\t\treturn 0, err\n\t}\n")
-	if len(spec.Filters) > 0 {
-		fmt.Fprintf(&b, "\tconds := make([]sq.Sqlizer, 0, %d+len(st.Wheres()))\n", len(spec.Filters))
-		b.WriteString("\t// 恒定条件:@filter 服务端不变量(WithoutFilter 可绕过),与调用方条件 AND。\n")
-		b.WriteString("\tif !st.FilterBypassed() {\n")
-		for i := range spec.Filters {
-			fmt.Fprintf(&b, "\t\tconds = append(conds, %s)\n", tc.filterExpr(&spec.Filters[i]))
-		}
-		b.WriteString("\t}\n")
-	} else {
-		b.WriteString("\tconds := make([]sq.Sqlizer, 0, len(st.Wheres()))\n")
+	var p printer
+	p.Raw(fill(updateFuncTail,
+		"res", tc.res,
+		"sing", spec.Singular,
+		"dbtx", tc.dbtx,
+		"filterDoc", filterDoc,
+		"noPkDoc", noPkDoc,
+		"filterConds", tc.filterCondsBlock(),
+		"cap", condsCap(len(spec.Filters)),
+		"table", strconv.Quote(tableNameQualified(spec.Name, tc.opts)),
+	))
+	return p.String()
+}
+
+// filterCondsBlock 生成 @filter 不变量的条件叠加语句块;无声明时为空。
+func (tc *tableCode) filterCondsBlock() string {
+	if len(tc.spec.Filters) == 0 {
+		return ""
 	}
-	b.WriteString("\tconds = append(conds, st.Wheres()...)\n")
-	fmt.Fprintf(&b, "\tb := sq.Update(%q).PlaceholderFormat(sq.Dollar).Where(sq.And(conds))\n", table)
-	b.WriteString("\tfor _, a := range st.Sets() {\n")
-	b.WriteString("\t\tb = b.Set(a.Column, sq.Expr(\"?\"+a.Cast, a.Value))\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tquery, args, err := b.ToSql()\n")
-	b.WriteString("\tif err != nil {\n\t\treturn 0, err\n\t}\n")
-	b.WriteString("\ttag, err := db.Exec(ctx, query, args...)\n")
-	b.WriteString("\tif err != nil {\n\t\treturn 0, err\n\t}\n")
-	b.WriteString("\treturn tag.RowsAffected(), nil\n")
-	b.WriteString("}\n")
-	return b.String()
+	var p printer
+	p.Raw(filterCondsHead)
+	for i := range tc.spec.Filters {
+		p.Linef("\t\tconds = append(conds, %s)", tc.filterExpr(&tc.spec.Filters[i]))
+	}
+	p.Raw(filterCondsTail)
+	return p.String()
+}
+
+// condsCap 返回 WHERE 条件切片的预分配容量表达式。
+func condsCap(filters int) string {
+	if filters == 0 {
+		return "len(st.Wheres())"
+	}
+	return fmt.Sprintf("%d+len(st.Wheres())", filters)
 }
 
 // ---- UpdateXxxReturning / UpdateXxxReturningByPk 执行函数 ----
@@ -343,12 +312,12 @@ func (tc *tableCode) updateFuncSection() string {
 // 单行语义不成立)。是否产出由生成期按现有类型信息(@pk)自动判断,
 // 不提供 opt-in 开关。
 func (tc *tableCode) updateReturningSection() string {
-	var b strings.Builder
-	b.WriteString(tc.updateReturningFuncSection(false))
+	var p printer
+	p.Raw(tc.updateReturningFuncSection(false))
 	if tc.spec.ReadEnabled {
-		b.WriteString(tc.updateReturningFuncSection(true))
+		p.Raw(tc.updateReturningFuncSection(true))
 	}
-	return b.String()
+	return p.String()
 }
 
 // returningCols 是 RETURNING 列清单:全部物理列名按 schema 声明序拼接
@@ -380,114 +349,43 @@ func (tc *tableCode) pkColumn() *ColumnSpec {
 // 与调用方 Where 条件 AND 且不占槽位。
 func (tc *tableCode) updateReturningFuncSection(byPk bool) string {
 	spec := tc.spec
-	sing, res := spec.Singular, tc.res
 	model := tc.modelPkg + spec.ModelName
-	table := tableNameQualified(spec.Name, tc.opts)
-	returning := tc.returningCols()
-	var b strings.Builder
-
+	var p printer
+	zero, collect := "nil", "pgx.CollectRows"
 	if byPk {
+		zero, collect = model+"{}", "pgx.CollectOneRow"
 		pk := tc.pkColumn()
-		fmt.Fprintf(&b, "// Update%sReturningByPk 按 pk 定位更新单行并返回改写后的整行:一条 SQL\n", res)
-		b.WriteString("// 完成 SET / WHERE / RETURNING,调用方无需更新后回查。\n")
-		b.WriteString("// 主键作为必填定位参数内建到 WHERE(与 opts 条件 AND);动态 WHERE 不保证\n")
-		b.WriteString("// 唯一,因此定位以参数承载——opts 条件是可选收窄,不再要求至少一条 Where。\n")
-		b.WriteString("// 零命中返回 pgx.ErrNoRows。\n")
-		b.WriteString("// 返回行语义:行值为 SET 表达式求值与 BEFORE 行级触发器改写后的新值\n")
-		b.WriteString("// (未 SET 的列保留原值),AFTER 触发器对行的后续修改不回传。\n")
-		b.WriteString("// SET 白名单、@filter 不变量(可 WithoutFilter 绕过)与零 SET 守卫与\n")
-		b.WriteString("// Update" + res + " 一致;@scope 不参与写面,权限由读取阶段保证。\n")
-		b.WriteString("//\n")
-		b.WriteString("// 参数:\n")
-		b.WriteString("//   - ctx: 更新上下文。\n")
-		b.WriteString("//   - db:  数据库连接,满足 DBTX 接口即可。\n")
-		fmt.Fprintf(&b, "//   - pk:  %s 列的定位值(必填;零命中即未命中)。\n", pk.Key)
-		fmt.Fprintf(&b, "//   - opts: SET / WHERE 选项(%sUpdate.*),跨表选项编译期不可混用。\n", sing)
-		b.WriteString("//\n")
-		b.WriteString("// 返回值:\n")
-		fmt.Fprintf(&b, "//   - %s: 被改写的整行。\n", model)
-		b.WriteString("//   - error: 校验或执行失败时的错误;零命中为 pgx.ErrNoRows。\n")
-		fmt.Fprintf(&b, "func Update%sReturningByPk(ctx context.Context, db %s, pk %s, opts ...%sUpdateOption) (%s, error) {\n",
-			res, tc.dbtx, pk.GoType, sing, model)
-		fmt.Fprintf(&b, "\tst := dynq.NewUpdateState[%sTable]()\n", sing)
-		b.WriteString("\tfor _, opt := range opts {\n")
-		b.WriteString("\t\tif opt == nil {\n\t\t\tcontinue\n\t\t}\n")
-		b.WriteString("\t\tif err := opt(st); err != nil {\n")
-		fmt.Fprintf(&b, "\t\t\treturn %s{}, err\n\t\t}\n\t}\n", model)
-		fmt.Fprintf(&b, "\t// 主键定位内建:计入调用方条件数(Locate 不占槽位,可与 Where%sEq\n", pk.GoConst)
-		b.WriteString("\t// 等显式收窄并存),零 where 守卫因此天然满足。\n")
-		fmt.Fprintf(&b, "\tst.Locate(sq.Expr(%q, pk))\n", pk.SQLName+" = ?"+pk.whereCast())
-		fmt.Fprintf(&b, "\tif err := st.Validate(); err != nil {\n\t\treturn %s{}, err\n\t}\n", model)
+		p.Raw(fill(returningByPkHead,
+			"res", tc.res,
+			"sing", spec.Singular,
+			"model", model,
+			"dbtx", tc.dbtx,
+			"pkKey", pk.Key,
+			"pkType", pk.GoType,
+			"pkConst", pk.GoConst,
+			"locateSQL", strconv.Quote(pk.SQLName+" = ?"+pk.whereCast()),
+		))
 	} else {
-		fmt.Fprintf(&b, "// Update%sReturning 按 opts 收集的 SET / WHERE 组合更新行并返回被改写的\n", res)
-		b.WriteString("// 整行:一条 SQL 完成 SET / WHERE / RETURNING,调用方无需更新后回查。\n")
-		b.WriteString("// 命中几行返回几行;返回行序未定义(RETURNING 无 ORDER BY),不得做顺序\n")
-		b.WriteString("// 假设;零命中返回空切片 + nil error。\n")
-		b.WriteString("// 返回行语义:行值为 SET 表达式求值与 BEFORE 行级触发器改写后的新值\n")
-		b.WriteString("// (未 SET 的列保留原值),AFTER 触发器对行的后续修改不回传。\n")
-		b.WriteString("// SET 白名单、@filter 不变量(可 WithoutFilter 绕过)与零 SET / 零 WHERE\n")
-		b.WriteString("// 守卫与 Update" + res + " 一致;@scope 不参与写面,权限由读取阶段保证。\n")
+		noPkDoc := ""
 		if !spec.ReadEnabled {
-			b.WriteString("//\n// 本表无 @pk:零 where 守卫只保证\"至少一个条件\",条件可能命中多行——\n")
-			b.WriteString("// 被改写行会全部返回;调用方必须自带唯一组合条件(如全部业务键列),\n")
-			b.WriteString("// 否则会批量改写。\n")
+			noPkDoc = "//\n// 本表无 @pk:零 where 守卫只保证\"至少一个条件\",条件可能命中多行——\n// 被改写行会全部返回;调用方必须自带唯一组合条件(如全部业务键列),\n// 否则会批量改写。\n"
 		}
-		b.WriteString("//\n")
-		b.WriteString("// 参数:\n")
-		b.WriteString("//   - ctx: 更新上下文。\n")
-		b.WriteString("//   - db:  数据库连接,满足 DBTX 接口即可。\n")
-		fmt.Fprintf(&b, "//   - opts: SET / WHERE 选项(%sUpdate.*),跨表选项编译期不可混用。\n", sing)
-		b.WriteString("//\n")
-		b.WriteString("// 返回值:\n")
-		fmt.Fprintf(&b, "//   - []%s: 被改写的整行,按命中返回;零命中为空切片。\n", model)
-		b.WriteString("//   - error:    校验或执行失败时的错误。\n")
-		fmt.Fprintf(&b, "func Update%sReturning(ctx context.Context, db %s, opts ...%sUpdateOption) ([]%s, error) {\n",
-			res, tc.dbtx, sing, model)
-		fmt.Fprintf(&b, "\tst := dynq.NewUpdateState[%sTable]()\n", sing)
-		b.WriteString("\tfor _, opt := range opts {\n")
-		b.WriteString("\t\tif opt == nil {\n\t\t\tcontinue\n\t\t}\n")
-		b.WriteString("\t\tif err := opt(st); err != nil {\n\t\t\treturn nil, err\n\t\t}\n")
-		b.WriteString("\t}\n")
-		b.WriteString("\t// 空 SET / 零 where 守卫:按调用方条件数计——@filter 叠加后最终 WHERE\n")
-		b.WriteString("\t// 恒非空,不得以最终 SQL 形态代替判断。\n")
-		b.WriteString("\tif err := st.Validate(); err != nil {\n\t\treturn nil, err\n\t}\n")
+		p.Raw(fill(returningMultiHead,
+			"res", tc.res,
+			"sing", spec.Singular,
+			"model", model,
+			"dbtx", tc.dbtx,
+			"noPkDoc", noPkDoc,
+		))
 	}
-
-	if len(spec.Filters) > 0 {
-		fmt.Fprintf(&b, "\tconds := make([]sq.Sqlizer, 0, %d+len(st.Wheres()))\n", len(spec.Filters))
-		b.WriteString("\t// 恒定条件:@filter 服务端不变量(WithoutFilter 可绕过),与调用方条件 AND。\n")
-		b.WriteString("\tif !st.FilterBypassed() {\n")
-		for i := range spec.Filters {
-			fmt.Fprintf(&b, "\t\tconds = append(conds, %s)\n", tc.filterExpr(&spec.Filters[i]))
-		}
-		b.WriteString("\t}\n")
-	} else {
-		b.WriteString("\tconds := make([]sq.Sqlizer, 0, len(st.Wheres()))\n")
-	}
-	b.WriteString("\tconds = append(conds, st.Wheres()...)\n")
-	fmt.Fprintf(&b, "\tb := sq.Update(%q).PlaceholderFormat(sq.Dollar).Where(sq.And(conds))\n", table)
-	b.WriteString("\tfor _, a := range st.Sets() {\n")
-	b.WriteString("\t\tb = b.Set(a.Column, sq.Expr(\"?\"+a.Cast, a.Value))\n")
-	b.WriteString("\t}\n")
-	fmt.Fprintf(&b, "\tb = b.Suffix(%q)\n", returning)
-	b.WriteString("\tquery, args, err := b.ToSql()\n")
-	b.WriteString("\tif err != nil {\n")
-	if byPk {
-		fmt.Fprintf(&b, "\t\treturn %s{}, err\n\t}\n", model)
-	} else {
-		b.WriteString("\t\treturn nil, err\n\t}\n")
-	}
-	b.WriteString("\trows, err := db.Query(ctx, query, args...)\n")
-	b.WriteString("\tif err != nil {\n")
-	if byPk {
-		fmt.Fprintf(&b, "\t\treturn %s{}, err\n\t}\n", model)
-	} else {
-		b.WriteString("\t\treturn nil, err\n\t}\n")
-	}
-	if byPk {
-		fmt.Fprintf(&b, "\treturn pgx.CollectOneRow(rows, pgx.RowToStructByNameLax[%s])\n}\n", model)
-	} else {
-		fmt.Fprintf(&b, "\treturn pgx.CollectRows(rows, pgx.RowToStructByNameLax[%s])\n}\n", model)
-	}
-	return b.String()
+	p.Raw(fill(returningTail,
+		"filterConds", tc.filterCondsBlock(),
+		"cap", condsCap(len(spec.Filters)),
+		"table", strconv.Quote(tableNameQualified(spec.Name, tc.opts)),
+		"returning", strconv.Quote(tc.returningCols()),
+		"zero", zero,
+		"collect", collect,
+		"model", model,
+	))
+	return p.String()
 }

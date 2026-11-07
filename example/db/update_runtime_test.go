@@ -91,13 +91,13 @@ func (f *fakeRows) Scan(dest ...any) error {
 	return nil
 }
 
-func (f *fakeRows) Close() {}
-func (f *fakeRows) Err() error { return nil }
-func (f *fakeRows) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} }
+func (f *fakeRows) Close()                                       {}
+func (f *fakeRows) Err() error                                   { return nil }
+func (f *fakeRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (f *fakeRows) FieldDescriptions() []pgconn.FieldDescription { return f.descs }
-func (f *fakeRows) Values() ([]any, error) { return nil, errors.New("unexpected Values") }
-func (f *fakeRows) RawValues() [][]byte { return nil }
-func (f *fakeRows) Conn() *pgx.Conn { return nil }
+func (f *fakeRows) Values() ([]any, error)                       { return nil, errors.New("unexpected Values") }
+func (f *fakeRows) RawValues() [][]byte                          { return nil }
+func (f *fakeRows) Conn() *pgx.Conn                              { return nil }
 
 func hasArg(args []any, want any) bool {
 	for _, a := range args {

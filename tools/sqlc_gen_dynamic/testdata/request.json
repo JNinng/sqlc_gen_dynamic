@@ -11,7 +11,7 @@
     "codegen": {
       "out": "gen",
       "plugin": "sqlc_gen_dynamic",
-      "options": "eyJkZWZhdWx0X29wcyI6Im5vbmUiLCJwYWNrYWdlIjoiZ2VuIiwicGFnZV9kZWZhdWx0IjoyMCwicGFnZV9tYXgiOjIwMCwicnVudGltZV9pbXBvcnQiOiJnaXRodWIuY29tL2puaW5uZy9zcWxjX2dlbl9keW5hbWljL2R5bnEiLCJzY2hlbWEiOiJwdWJsaWMifQ==",
+      "options": "eyJkZWZhdWx0X29wcyI6Im5vbmUiLCJwYWNrYWdlIjoiZ2VuIiwicGFnZSI6eyJkZWZhdWx0IjoyMCwibWF4IjoyMDAsInRhYmxlcyI6eyJjdXN0b21lcnMiOnsiZGVmYXVsdCI6MjAsIm1heCI6MTAwfSwib3JkZXJzIjp7ImRlZmF1bHQiOjIwLCJtYXgiOjEwMH0sInByb2plY3RzIjp7ImRlZmF1bHQiOjIwLCJtYXgiOjEwMH19fSwicnVudGltZV9pbXBvcnQiOiJnaXRodWIuY29tL2puaW5uZy9zcWxjX2dlbl9keW5hbWljL2R5bnEiLCJzY2hlbWEiOiJwdWJsaWMiLCJ1aSI6eyJvcmRlcnMiOnsidXNlcl9pZCI6eyJhcGkiOnsiZW5kcG9pbnQiOiIvYXBpL3YxL3VzZXJzL29wdGlvbnMiLCJsYWJlbF9rZXkiOiJuYW1lIiwidmFsdWVfa2V5IjoiaWQifX19LCJ1c2VycyI6eyJhZ2UiOnsib3B0aW9ucyI6W3sibGFiZWwiOiLmnKrnn6UiLCJ2YWx1ZSI6MH0seyJsYWJlbCI6IuaIkOW5tCIsInZhbHVlIjoxOH0seyJsYWJlbCI6IumAgOS8kSIsInZhbHVlIjo2NX1dLCJvcmRlciI6LTF9LCJlbWFpbCI6eyJsYWJlbCI6IueUteWtkOmCrueusSIsIm9yZGVyIjoxMH0sImlkIjp7InZpc2liaWxpdHkiOiJhbHdheXMifSwibWV0YSI6eyJ2aXNpYmlsaXR5IjoiaGlkZGVuIn0sIm9yZ19pZCI6eyJkZXNjIjoi5omA5bGe57uE57uH55qE5ZSv5LiA5qCH6K+GIn0sInJvbGUiOnsib3B0aW9ucyI6W3sibGFiZWwiOiLnrqHnkIblkZgiLCJ2YWx1ZSI6ImFkbWluIn0seyJsYWJlbCI6IuaZrumAmueUqOaItyIsInZhbHVlIjoidXNlciJ9LHsibGFiZWwiOiLorr/lrqIiLCJ2YWx1ZSI6Imd1ZXN0In1dfSwic3RhdHVzIjp7ImRlc2MiOiLotKblj7fnmoTlkK/nlKjnirbmgIEiLCJsYWJlbCI6IueUqOaIt+eKtuaAgSIsIm9yZGVyIjoxMH19fX0=",
       "env": [
         "DYNQ_DUMP_REQUEST"
       ],
@@ -34,7 +34,7 @@
               {
                 "name": "id",
                 "notNull": true,
-                "comment": "ID [@dynamic: exact, in @sortable @hideable]",
+                "comment": "ID [@dynamic: exact, membership]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -47,7 +47,7 @@
               {
                 "name": "name",
                 "notNull": true,
-                "comment": "姓名 [@dynamic: fuzzy, exact @sortable @hideable @updatable]",
+                "comment": "姓名 [@dynamic: fuzzy, exact, sort @updatable]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -59,7 +59,7 @@
               {
                 "name": "email",
                 "notNull": true,
-                "comment": "用户邮箱，如 test@example.com [@label: 电子邮箱 @order: 10 @dynamic: exact, in, prefix @hideable @updatable: set]",
+                "comment": "用户邮箱，如 test@example.com [@dynamic: exact, membership, prefix @updatable: set]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -83,7 +83,7 @@
               {
                 "name": "status",
                 "notNull": true,
-                "comment": "状态 [已废弃，仅展示] [@label: 用户状态 @desc: 账号的启用状态 @order: 10 @dynamic: exact, in @sortable @hideable @updatable]",
+                "comment": "状态 [已废弃，仅展示] [@dynamic: exact, membership, sort @updatable]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -94,7 +94,7 @@
               },
               {
                 "name": "role",
-                "comment": "角色 [@options: admin=管理员 user=普通用户 guest=访客 @dynamic: fuzzy @sortable @updatable: exact]",
+                "comment": "角色 [@dynamic: fuzzy, sort @updatable: exact]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -105,7 +105,7 @@
               },
               {
                 "name": "age",
-                "comment": "年龄 [@options: 0=未知 18=成年 65=退休 @order: -1 @dynamic: exact, in, range @sortable @hideable @updatable: eq, range]",
+                "comment": "年龄 [@dynamic: exact, membership, range, sort @updatable: eq, range]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -117,7 +117,7 @@
               },
               {
                 "name": "score",
-                "comment": "评分 [0-100] [@dynamic: range @sortable @hideable @updatable: set]",
+                "comment": "评分 [0-100] [@dynamic: range, sort @updatable: set]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -129,7 +129,7 @@
               },
               {
                 "name": "balance",
-                "comment": "余额 [元] [@dynamic: range @sortable @hideable @updatable: set]",
+                "comment": "余额 [元] [@dynamic: range, sort @updatable: set]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -141,7 +141,7 @@
               },
               {
                 "name": "birth_date",
-                "comment": "生日 [@dynamic: eq, range @hideable @updatable: false]",
+                "comment": "生日 [@dynamic: eq, range]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -152,7 +152,7 @@
               },
               {
                 "name": "org_id",
-                "comment": "组织ID [@desc: 所属组织的唯一标识 @dynamic: exact, in @updatable: where]",
+                "comment": "组织ID [@dynamic: exact, membership @updatable: locate]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -164,7 +164,7 @@
               {
                 "name": "tags",
                 "isArray": true,
-                "comment": "标签 [@dynamic: in @hideable @updatable]",
+                "comment": "标签 [@dynamic: membership @updatable]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -189,7 +189,7 @@
               {
                 "name": "created_at",
                 "notNull": true,
-                "comment": "创建时间 [@dynamic: exact, in, range @sortable @hideable]",
+                "comment": "创建时间 [@dynamic: exact, membership, range, sort]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -200,7 +200,7 @@
               },
               {
                 "name": "updated_at",
-                "comment": "更新时间 [@dynamic: range, is_null, not_null @sortable @updatable: eq, is_null]",
+                "comment": "更新时间 [@dynamic: range, is_null, not_null, sort @updatable: eq, is_null]",
                 "length": -1,
                 "table": {
                   "name": "users"
@@ -221,7 +221,7 @@
                 }
               }
             ],
-            "comment": "用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null]"
+            "comment": "用户表 [@default_sort: created_at DESC @pk: id @filter: deleted_at is_null]"
           },
           {
             "rel": {
@@ -243,7 +243,7 @@
               {
                 "name": "order_no",
                 "notNull": true,
-                "comment": "订单号 [@dynamic: exact, prefix @hideable @updatable: set]",
+                "comment": "订单号 [@dynamic: exact, prefix @updatable: set]",
                 "length": -1,
                 "table": {
                   "name": "orders"
@@ -255,7 +255,7 @@
               {
                 "name": "user_id",
                 "notNull": true,
-                "comment": "用户ID [@dynamic: eq, in @hideable @api: /api/v1/users/options value_key=id label_key=name @updatable: where]",
+                "comment": "用户ID [@dynamic: eq, membership @updatable: locate]",
                 "length": -1,
                 "table": {
                   "name": "orders"
@@ -268,7 +268,7 @@
               {
                 "name": "amount_cents",
                 "notNull": true,
-                "comment": "金额（分） [@dynamic: range @sortable @hideable @updatable: range]",
+                "comment": "金额（分） [@dynamic: range, sort @updatable: range]",
                 "length": -1,
                 "table": {
                   "name": "orders"
@@ -281,7 +281,7 @@
               {
                 "name": "status",
                 "notNull": true,
-                "comment": "状态 [@dynamic: exact, in @sortable @hideable @updatable: eq, neq]",
+                "comment": "状态 [@dynamic: exact, membership, sort @updatable: eq, neq]",
                 "length": -1,
                 "table": {
                   "name": "orders"
@@ -293,7 +293,7 @@
               {
                 "name": "created_at",
                 "notNull": true,
-                "comment": "创建时间 [@dynamic: range @sortable @hideable]",
+                "comment": "创建时间 [@dynamic: range, sort]",
                 "length": -1,
                 "table": {
                   "name": "orders"
@@ -303,7 +303,7 @@
                 }
               }
             ],
-            "comment": "订单表 [@default_sort: created_at DESC @pk: id @page: 20/100 @filter: amount_cents gte 0]"
+            "comment": "订单表 [@default_sort: created_at DESC @pk: id @filter: amount_cents gte 0]"
           },
           {
             "rel": {
@@ -412,7 +412,7 @@
               {
                 "name": "resource",
                 "notNull": true,
-                "comment": "资源 [@updatable: where]",
+                "comment": "资源 [@updatable: locate]",
                 "length": -1,
                 "table": {
                   "name": "sys_resource_grant"
@@ -425,7 +425,7 @@
               {
                 "name": "user_id",
                 "notNull": true,
-                "comment": "用户ID [@updatable: where]",
+                "comment": "用户ID [@updatable: locate]",
                 "length": -1,
                 "table": {
                   "name": "sys_resource_grant"
@@ -438,7 +438,7 @@
               {
                 "name": "record_id",
                 "notNull": true,
-                "comment": "记录ID [@updatable: where]",
+                "comment": "记录ID [@updatable: locate]",
                 "length": -1,
                 "table": {
                   "name": "sys_resource_grant"
@@ -469,7 +469,7 @@
               {
                 "name": "id",
                 "notNull": true,
-                "comment": "ID [@dynamic: exact @sortable @hideable]",
+                "comment": "ID [@dynamic: exact]",
                 "length": -1,
                 "table": {
                   "name": "customers"
@@ -482,7 +482,7 @@
               {
                 "name": "name",
                 "notNull": true,
-                "comment": "客户名 [@dynamic: fuzzy @sortable @hideable @updatable]",
+                "comment": "客户名 [@dynamic: fuzzy, sort @updatable]",
                 "length": -1,
                 "table": {
                   "name": "customers"
@@ -494,7 +494,7 @@
               {
                 "name": "amount_cents",
                 "notNull": true,
-                "comment": "金额（分） [@dynamic: range @sortable @hideable @updatable: set]",
+                "comment": "金额（分） [@dynamic: range, sort @updatable: set]",
                 "length": -1,
                 "table": {
                   "name": "customers"
@@ -533,7 +533,7 @@
               {
                 "name": "created_at",
                 "notNull": true,
-                "comment": "创建时间 [@dynamic: range @sortable @hideable]",
+                "comment": "创建时间 [@dynamic: range, sort]",
                 "length": -1,
                 "table": {
                   "name": "customers"
@@ -554,7 +554,7 @@
                 }
               }
             ],
-            "comment": "客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted('customers', user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @update: true]"
+            "comment": "客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) owner_dept_id in fn_accessible_dept_ids(user_id:varchar, scopes:int[]) id in fn_permitted('customers', user_id:varchar) @default_sort: created_at DESC @pk: id]"
           },
           {
             "rel": {
@@ -564,7 +564,7 @@
               {
                 "name": "id",
                 "notNull": true,
-                "comment": "ID [@dynamic: exact @sortable @hideable]",
+                "comment": "ID [@dynamic: exact]",
                 "length": -1,
                 "table": {
                   "name": "projects"
@@ -577,7 +577,7 @@
               {
                 "name": "name",
                 "notNull": true,
-                "comment": "项目名 [@dynamic: fuzzy @sortable @hideable @updatable]",
+                "comment": "项目名 [@dynamic: fuzzy, sort @updatable]",
                 "length": -1,
                 "table": {
                   "name": "projects"
@@ -615,7 +615,7 @@
               {
                 "name": "created_at",
                 "notNull": true,
-                "comment": "创建时间 [@dynamic: range @sortable @hideable]",
+                "comment": "创建时间 [@dynamic: range, sort]",
                 "length": -1,
                 "table": {
                   "name": "projects"
@@ -625,7 +625,7 @@
                 }
               }
             ],
-            "comment": "项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @page: 20/100 @filter: name eq 'template']"
+            "comment": "项目表 [@scope: tenant_id eq fn_tenant_id(user_id:varchar) @default_sort: created_at DESC @pk: id @filter: name eq 'template']"
           },
           {
             "rel": {
@@ -33464,5 +33464,5 @@
     }
   ],
   "sqlc_version": "v1.31.1",
-  "plugin_options": "eyJkZWZhdWx0X29wcyI6Im5vbmUiLCJwYWNrYWdlIjoiZ2VuIiwicGFnZV9kZWZhdWx0IjoyMCwicGFnZV9tYXgiOjIwMCwicnVudGltZV9pbXBvcnQiOiJnaXRodWIuY29tL2puaW5uZy9zcWxjX2dlbl9keW5hbWljL2R5bnEiLCJzY2hlbWEiOiJwdWJsaWMifQ=="
+  "plugin_options": "eyJkZWZhdWx0X29wcyI6Im5vbmUiLCJwYWNrYWdlIjoiZ2VuIiwicGFnZSI6eyJkZWZhdWx0IjoyMCwibWF4IjoyMDAsInRhYmxlcyI6eyJjdXN0b21lcnMiOnsiZGVmYXVsdCI6MjAsIm1heCI6MTAwfSwib3JkZXJzIjp7ImRlZmF1bHQiOjIwLCJtYXgiOjEwMH0sInByb2plY3RzIjp7ImRlZmF1bHQiOjIwLCJtYXgiOjEwMH19fSwicnVudGltZV9pbXBvcnQiOiJnaXRodWIuY29tL2puaW5uZy9zcWxjX2dlbl9keW5hbWljL2R5bnEiLCJzY2hlbWEiOiJwdWJsaWMiLCJ1aSI6eyJvcmRlcnMiOnsidXNlcl9pZCI6eyJhcGkiOnsiZW5kcG9pbnQiOiIvYXBpL3YxL3VzZXJzL29wdGlvbnMiLCJsYWJlbF9rZXkiOiJuYW1lIiwidmFsdWVfa2V5IjoiaWQifX19LCJ1c2VycyI6eyJhZ2UiOnsib3B0aW9ucyI6W3sibGFiZWwiOiLmnKrnn6UiLCJ2YWx1ZSI6MH0seyJsYWJlbCI6IuaIkOW5tCIsInZhbHVlIjoxOH0seyJsYWJlbCI6IumAgOS8kSIsInZhbHVlIjo2NX1dLCJvcmRlciI6LTF9LCJlbWFpbCI6eyJsYWJlbCI6IueUteWtkOmCrueusSIsIm9yZGVyIjoxMH0sImlkIjp7InZpc2liaWxpdHkiOiJhbHdheXMifSwibWV0YSI6eyJ2aXNpYmlsaXR5IjoiaGlkZGVuIn0sIm9yZ19pZCI6eyJkZXNjIjoi5omA5bGe57uE57uH55qE5ZSv5LiA5qCH6K+GIn0sInJvbGUiOnsib3B0aW9ucyI6W3sibGFiZWwiOiLnrqHnkIblkZgiLCJ2YWx1ZSI6ImFkbWluIn0seyJsYWJlbCI6IuaZrumAmueUqOaItyIsInZhbHVlIjoidXNlciJ9LHsibGFiZWwiOiLorr/lrqIiLCJ2YWx1ZSI6Imd1ZXN0In1dfSwic3RhdHVzIjp7ImRlc2MiOiLotKblj7fnmoTlkK/nlKjnirbmgIEiLCJsYWJlbCI6IueUqOaIt+eKtuaAgSIsIm9yZGVyIjoxMH19fX0="
 }

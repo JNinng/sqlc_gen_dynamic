@@ -21,10 +21,10 @@ type SortField struct {
 
 // ResolveSort 解析有效排序(查询函数内统一执行):
 //  1. 用户指定排序 → 逐项过白名单校验:字段在 registry 中、非 @internal、
-//     已声明 @sortable、未被 opts 禁用。
+//     经 @dynamic: sort(或 @pk / @default_sort 隐式)可排序且未被 opts 禁用。
 //  2. 未指定 → 回落表级 @default_sort;回落不受 opts 禁用影响——default_sort 是
 //     生成期表级不变量,DisableSort 只收窄调用点的显式排序能力,与 @filter 不受
-//     DisableWhere 影响同构(取舍见 dsl.md §3.3)。
+//     DisableWhere 影响同构(取舍见 dsl.md §3.2)。
 //  3. 末列若非主键 → 追加主键 ASC 作 tiebreaker,保证排序全序(分页与游标定位都依赖)。
 func ResolveSort(meta TableMeta, cfg *QueryConfig, order []OrderBy) ([]SortField, error) {
 	var seq []SortField

@@ -89,13 +89,14 @@ func opsSet(ops ...string) map[string]bool {
 	return m
 }
 
-// presetOps 预设展开(§5.4)。预设名 fuzzy 与 op contains 显式区分。
+// presetOps 预设展开(§5.4):exact / membership / range / fuzzy。预设名 fuzzy
+// 与 op contains 显式区分;membership 展开为 in + not_in,裸 in 是普通 op。
+// @dynamic 与 @updatable 共用本表;has 不是预设,需要时显式声明 op has。
 var presetOps = map[string][]string{
-	"exact": {"eq", "neq"},
-	"in":    {"in", "not_in"},
-	"range": {"gt", "gte", "lt", "lte", "between"},
-	"fuzzy": {"contains", "prefix", "suffix"},
-	"has":   {"has"},
+	"exact":      {"eq", "neq"},
+	"membership": {"in", "not_in"},
+	"range":      {"gt", "gte", "lt", "lte", "between"},
+	"fuzzy":      {"contains", "prefix", "suffix"},
 }
 
 var knownOps = map[string]bool{
@@ -104,15 +105,35 @@ var knownOps = map[string]bool{
 	"contains": true, "is_null": true, "not_null": true, "has": true,
 }
 
-// expandDynamicItems 展开 @dynamic 的预设与 op 列表:
+// sortToken 是 @dynamic 的排序能力位标记:先于预设/op 展开识别,
+// 只置 Sortable,不生成 Params 字段。
+const sortToken = "sort"
+
+// dynamicPayloadHasOps 报告 payload 在剔除 sort 能力位后是否还有 op 项。
+// 纯 sort 声明(去掉 sort 后为空)由调用方回落 default_ops,避免丢失过滤能力。
+func dynamicPayloadHasOps(payload string) bool {
+	for _, raw := range strings.Split(payload, ",") {
+		item := strings.TrimSpace(raw)
+		if item != "" && item != sortToken {
+			return true
+		}
+	}
+	return false
+}
+
+// expandDynamicItems 展开 @dynamic 的 sort 能力位与 op 列表:
+//   - sort 是能力位,先于预设/op 展开识别,返回 sortable=true;
 //   - 预设项与类型能力取交集(§7.2 最终 op 集合 = 类型能力 ∩ DSL 声明),
-//     如 int_array 列声明预设 in 时 not_in 被裁剪而非报错;
+//     如 int_array 列声明预设 membership 时 not_in 被裁剪而非报错;
 //   - 显式 op 项严格校验:类型不支持 → 生成期 fail(§5.3.9);
-//   - is_null/not_null 不入预设、不从可空性授予,声明于非空列 → fail。
-func expandDynamicItems(where, dataType, payload string, nullable bool) ([]string, error) {
+//   - is_null/not_null 不入预设、不从可空性授予,声明于非空列 → fail;
+//   - sort 之外无项 → 返回空 ops(调用方决定是否回落 default_ops);
+//     有项但展开为空 → fail。
+func expandDynamicItems(where, dataType, payload string, nullable bool) (ops []string, sortable bool, err error) {
 	allowed := capabilityMatrix[dataType]
 	var out []string
 	seen := map[string]bool{}
+	hasOpItems := false
 	addStrict := func(op string) error {
 		if !knownOps[op] {
 			return fmt.Errorf("%s: unknown @dynamic item %q", where, op)
@@ -144,8 +165,13 @@ func expandDynamicItems(where, dataType, payload string, nullable bool) ([]strin
 	for _, rawItem := range strings.Split(payload, ",") {
 		item := strings.TrimSpace(rawItem)
 		if item == "" {
-			return nil, fmt.Errorf("%s: empty @dynamic item", where)
+			return nil, false, fmt.Errorf("%s: empty @dynamic item", where)
 		}
+		if item == sortToken {
+			sortable = true
+			continue
+		}
+		hasOpItems = true
 		if preset, ok := presetOps[item]; ok {
 			for _, op := range preset {
 				addIntersect(op)
@@ -153,13 +179,13 @@ func expandDynamicItems(where, dataType, payload string, nullable bool) ([]strin
 			continue
 		}
 		if err := addStrict(item); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("%s: @dynamic declares no supported ops for dataType %s", where, dataType)
+	if hasOpItems && len(out) == 0 {
+		return nil, false, fmt.Errorf("%s: @dynamic declares no supported ops for dataType %s", where, dataType)
 	}
-	return out, nil
+	return out, sortable, nil
 }
 
 // canonicalOpOrder 是 op 的规范输出顺序(预设展开、显式清单与 @pk 自动
@@ -169,7 +195,7 @@ var canonicalOpOrder = []string{
 	"contains", "prefix", "suffix", "is_null", "not_null", "has",
 }
 
-// matrixOps 返回 dataType 的类型有效 op 集(auto / where 形态与 @pk 自动
+// matrixOps 返回 dataType 的类型有效 op 集(auto / locate 形态与 @pk 自动
 // 定位使用):严格按 dsl.md §4.2 能力矩阵,不追加 null op。
 func matrixOps(dataType string) []string {
 	allowed := capabilityMatrix[dataType]
@@ -185,7 +211,7 @@ func matrixOps(dataType string) []string {
 // expandUpdatableItems 展开 @updatable 的显式清单。语义与 @dynamic 同构,
 // 但独立实现——expandDynamicItems 的输出顺序(声明序)与报错文案是读面
 // 既存契约,不复用:
-//   - 预设项与类型能力取交集,如 int_array 列声明 in 时 not_in 被裁剪;
+//   - 预设项与类型能力取交集,如 int_array 列声明 membership 时 not_in 被裁剪;
 //   - 显式 op 严格校验:类型不支持 → 生成期 fail;
 //   - is_null/not_null 仅可空列、仅显式声明;
 //   - 展开为空 → 生成期 fail;去重后按 canonical 序输出。

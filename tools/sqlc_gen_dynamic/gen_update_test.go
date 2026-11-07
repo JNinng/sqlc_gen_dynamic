@@ -16,7 +16,7 @@ import (
 // TestGeneratePkAutoLocator 覆盖两条正向规则:
 //  1. 有 @pk、只有 set-capable 列(无任何 where 声明)也能生成更新面——
 //     where 资格完全由 pk 自动矩阵满足;
-//  2. 显式 @updatable: auto 与裸形态等价(Set + Where),策略头回显裸形态。
+//  2. 裸 @updatable 即 auto(Set + Where),策略头回显裸形态。
 func TestGeneratePkAutoLocator(t *testing.T) {
 	// 只有 set-capable:pk 必须是唯一的定位来源。
 	req := loadGoldenRequest(t)
@@ -49,17 +49,17 @@ func TestGeneratePkAutoLocator(t *testing.T) {
 		t.Error("@pk column must never generate SET")
 	}
 
-	// 显式 auto:Set + WHERE 两侧齐全(与裸形态等价);策略头回显裸形态。
+	// 裸 @updatable:Set + WHERE 两侧齐全;策略头回显裸形态。
 	req = loadGoldenRequest(t)
 	users = findTable(req, "users")
 	for _, c := range users.Columns {
 		c.Comment = ""
 	}
-	setComment(req, "users", "email", "邮箱 [@updatable: auto]")
+	setComment(req, "users", "email", "邮箱 [@updatable]")
 	users.Comment = "用户表 [@pk: id]"
 	resp, err = Generate(context.Background(), req)
 	if err != nil {
-		t.Fatalf("Generate(explicit auto): %v", err)
+		t.Fatalf("Generate(bare updatable): %v", err)
 	}
 	s = mustFile(t, resp, "users_dynamic_gen.go")
 	for _, want := range []string{
@@ -73,8 +73,8 @@ func TestGeneratePkAutoLocator(t *testing.T) {
 	}
 }
 
-// TestGenerateUpdateSurface 覆盖动态更新面产物:五形态下的 SET / WHERE
-// 能力切分(@internal 正交、set-only、where-only、false 惰性、显式清单)、
+// TestGenerateUpdateSurface 覆盖动态更新面产物:四形态下的 SET / WHERE
+// 能力切分(@internal 正交、set-only、locate-only、显式清单)、
 // @pk 自动定位矩阵、@filter 绕过与 Update 不消费 @scope。
 func TestGenerateUpdateSurface(t *testing.T) {
 	req := loadGoldenRequest(t)
@@ -94,9 +94,9 @@ func TestGenerateUpdateSurface(t *testing.T) {
 		// 非空列:值类型;可空列:*T(nil = 显式置 NULL)。
 		"func (UserTable) SetName(v string) UserUpdateOption",
 		"func (UserTable) SetRole(v *string) UserUpdateOption",
-		// Set 注释:列 label 紧随列名;非空列标注无 nil,可空列说明 dynq.Ptr。
-		"// SetName 设置 name（姓名）列值，无 nil。",
-		"// SetRole 设置 role（角色）列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。",
+		// Set 注释:label 来自 options.ui(未声明时回落物理列名,不重复输出)。
+		"// SetName 设置 name 列值，无 nil。",
+		"// SetRole 设置 role 列值，nil = 显式置 NULL，字面量取指针用 dynq.Ptr。",
 		// @internal + set:服务端可写、协议不可见(Update 与 @internal 正交)。
 		"func (UserTable) SetPassword(v string) UserUpdateOption",
 		"func (UserTable) WherePasswordEq(v string) UserUpdateOption",
@@ -109,12 +109,12 @@ func TestGenerateUpdateSurface(t *testing.T) {
 		"func (UserTable) WhereIDEq(v int64) UserUpdateOption",
 		"func (UserTable) WhereIDIn(vs ...int64) UserUpdateOption",
 		"func (UserTable) WhereIDBetween(lo, hi int64) UserUpdateOption",
-		// auto / 显式清单 / where-only 的 WHERE 能力。
+		// 裸 / 显式清单 / locate-only 的 WHERE 能力。
 		"func (UserTable) WhereNameEq(v string) UserUpdateOption",
 		"func (UserTable) WhereStatusIn(vs ...UserStatus) UserUpdateOption",
 		"func (UserTable) WhereRoleEq(v string) UserUpdateOption",         // exact 预设:set + where
 		"func (UserTable) WhereAgeBetween(lo, hi int64) UserUpdateOption", // 显式清单 eq, range
-		"func (UserTable) WhereOrgIDEq(v string) UserUpdateOption",        // where-only
+		"func (UserTable) WhereOrgIDEq(v string) UserUpdateOption",        // locate-only
 		"func (UserTable) WhereTagsIn(vs []int64) UserUpdateOption",
 		"func (UserTable) WhereUpdatedAtIsNull() UserUpdateOption",
 		// 执行函数:typed 选项 + @filter 不变量(可绕过)+ execrows。
@@ -129,7 +129,7 @@ func TestGenerateUpdateSurface(t *testing.T) {
 			t.Errorf("users update surface missing %q", want)
 		}
 	}
-	// 能力切分:set-only / false 不产 WHERE;where-only 不产 Set;
+	// 能力切分:set-only 不产 WHERE;locate-only 不产 Set;
 	// 显式清单外的 op 不产方法。
 	for _, forbidden := range []string{
 		"WhereEmail", "WhereScore", "WhereBalance", "WhereMeta", "WhereDeletedAt",
@@ -151,10 +151,9 @@ func TestGenerateUpdateSurface(t *testing.T) {
 		}
 	}
 
-	// @scope 表 + @filter:显式 @update: true 回显;filter 仍生效,无权限谓词。
+	// @scope 表 + @filter:filter 仍生效,无权限谓词。
 	customers := src["customers_dynamic_gen.go"]
 	for _, want := range []string{
-		"table customers: [@update: true]",
 		"func (CustomerTable) SetName(v string) CustomerUpdateOption",
 		"func (CustomerTable) SetAmountCents(v int64) CustomerUpdateOption",
 		"func (CustomerTable) WhereIDEq(v int64) CustomerUpdateOption",
@@ -178,7 +177,7 @@ func TestGenerateUpdateSurface(t *testing.T) {
 		t.Error("projects: Update must not inline @scope guard predicates")
 	}
 
-	// 枚举显式清单(status: eq, neq)带 cast;user_id 为 where-only 不产 Set。
+	// 枚举显式清单(status: eq, neq)带 cast;user_id 为 locate-only 不产 Set。
 	orders := src["orders_dynamic_gen.go"]
 	for _, want := range []string{
 		`st.Set("status", "status", "::order_status", v)`,
@@ -190,7 +189,7 @@ func TestGenerateUpdateSurface(t *testing.T) {
 		}
 	}
 	if strings.Contains(orders, "SetUserID") {
-		t.Error("orders: where-only column must not generate SET")
+		t.Error("orders: locate-only column must not generate SET")
 	}
 }
 
@@ -275,176 +274,6 @@ func TestGenerateNoPkUpdateOnly(t *testing.T) {
 	}
 }
 
-// TestGenerateUpdateBareDirective 覆盖裸 @update(= @update: true)与策略头
-// 原文回显。
-func TestGenerateUpdateBareDirective(t *testing.T) {
-	req := loadGoldenRequest(t)
-	setTableComment(req, "users", "用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null @update]")
-	resp, err := Generate(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	s := mustFile(t, resp, "users_dynamic_gen.go")
-	if !strings.Contains(s, "table users: [@update]") {
-		t.Error("bare @update echo missing")
-	}
-	if !strings.Contains(s, "func UpdateUsers(") {
-		t.Error("bare @update must enable the update surface")
-	}
-}
-
-// TestGeneratePkUpdatableInert 覆盖 @pk 列上的 where / false 形态:惰性(不
-// 改生成结果),pk 仍自动获得完整类型矩阵定位方法,且永不生成 Set。
-func TestGeneratePkUpdatableInert(t *testing.T) {
-	for _, payload := range []string{"where", "false"} {
-		req := loadGoldenRequest(t)
-		setComment(req, "users", "id", "ID [@dynamic: exact, in @sortable @hideable @updatable: "+payload+"]")
-		resp, err := Generate(context.Background(), req)
-		if err != nil {
-			t.Fatalf("@updatable: %s on pk must be inert: %v", payload, err)
-		}
-		s := mustFile(t, resp, "users_dynamic_gen.go")
-		if !strings.Contains(s, "func (UserTable) WhereIDEq(v int64) UserUpdateOption") {
-			t.Errorf("@updatable: %s on pk must keep the auto where matrix", payload)
-		}
-		if strings.Contains(s, "SetID") {
-			t.Errorf("@updatable: %s on pk must never generate SetID", payload)
-		}
-	}
-}
-
-// TestGenerateUpdatableFalseUnmapped 覆盖 @updatable: false 的惰性:不可映射
-// 类型不参与任何判定,生成期放行;该列仍是正常读面列,但不产 Set/Where。
-func TestGenerateUpdatableFalseUnmapped(t *testing.T) {
-	req := loadGoldenRequest(t)
-	addColumn(req, "users", "blob_col", "bytea", true)
-	setComment(req, "users", "blob_col", "载荷 [@updatable: false]")
-	resp, err := Generate(context.Background(), req)
-	if err != nil {
-		t.Fatalf("@updatable: false must not require a mappable type: %v", err)
-	}
-	s := mustFile(t, resp, "users_dynamic_gen.go")
-	if !strings.Contains(s, `Column:     "blob_col"`) {
-		t.Error("@updatable: false column must stay in the read-side registry")
-	}
-	if strings.Contains(s, "SetBlobCol") || strings.Contains(s, "WhereBlobCol") {
-		t.Error("@updatable: false column must not generate Set/Where methods")
-	}
-}
-
-// TestGenerateUpdateFalseWithLazyDeclarations 覆盖 @update: false 与惰性声明
-// 共存的合法组合:列上 @updatable: false、pk 上 @updatable: where 均为惰性,
-// 只读面保留、不生成更新面。
-func TestGenerateUpdateFalseWithLazyDeclarations(t *testing.T) {
-	req := loadGoldenRequest(t)
-	users := findTable(req, "users")
-	for _, c := range users.Columns {
-		c.Comment = ""
-	}
-	setComment(req, "users", "name", "姓名 [@updatable: false]")
-	setComment(req, "users", "id", "ID [@updatable: where]")
-	users.Comment = "用户表 [@pk: id @update: false]"
-	resp, err := Generate(context.Background(), req)
-	if err != nil {
-		t.Fatalf("@update: false + lazy declarations must be legal: %v", err)
-	}
-	s := mustFile(t, resp, "users_dynamic_gen.go")
-	if !strings.Contains(s, "func ListUsers(") {
-		t.Error("read surface must be kept with @update: false")
-	}
-	for _, forbidden := range []string{"UserTable", "UserUpdate", "UpdateUsers"} {
-		if strings.Contains(s, forbidden) {
-			t.Errorf("@update: false must not emit %q", forbidden)
-		}
-	}
-}
-
-// TestGenerateNoPkFilter 覆盖无 @pk 更新面表的 @filter:不变量进 UPDATE,
-// WithoutFilter 生成(读面仍为零产物)。
-func TestGenerateNoPkFilter(t *testing.T) {
-	req := loadGoldenRequest(t)
-	setTableComment(req, "sys_resource_grant", "共享授权 [@filter: note is_null]")
-	resp, err := Generate(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	s := mustFile(t, resp, "sys_resource_grant_dynamic_gen.go")
-	for _, want := range []string{
-		"func (SysResourceGrantTable) WithoutFilter() SysResourceGrantUpdateOption",
-		"if !st.FilterBypassed() {",
-		`conds = append(conds, sq.Expr("note IS NULL"))`,
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("no-pk update surface missing %q", want)
-		}
-	}
-}
-
-// TestGenerateUpdateDisabled 覆盖 @update: false 显式退出:即使表本可有更新面
-// (此处列指令被剥离,只剩 @pk),产物也不含任何 Update 面符号。
-func TestGenerateUpdateDisabled(t *testing.T) {
-	req := loadGoldenRequest(t)
-	users := findTable(req, "users")
-	for _, c := range users.Columns {
-		c.Comment = ""
-	}
-	users.Comment = "用户表 [@pk: id @update: false]"
-	resp, err := Generate(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	s := mustFile(t, resp, "users_dynamic_gen.go")
-	for _, forbidden := range []string{"UserTable", "UserUpdate", "UpdateUsers"} {
-		if strings.Contains(s, forbidden) {
-			t.Errorf("@update: false must not emit %q", forbidden)
-		}
-	}
-}
-
-// TestGenerateUpdateEchoForms 覆盖 @update 各载荷的策略头原文回显:
-// 裸形态回显 @update,true / auto / false 回显声明原文;false 不产更新面。
-func TestGenerateUpdateEchoForms(t *testing.T) {
-	base := "用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null "
-	for _, tc := range []struct{ name, payload, echo string }{
-		{"bare", "@update", "[@update]"},
-		{"true", "@update: true", "[@update: true]"},
-		{"auto", "@update: auto", "[@update: auto]"},
-	} {
-		req := loadGoldenRequest(t)
-		setTableComment(req, "users", base+tc.payload+"]")
-		resp, err := Generate(context.Background(), req)
-		if err != nil {
-			t.Fatalf("%s: Generate: %v", tc.name, err)
-		}
-		s := mustFile(t, resp, "users_dynamic_gen.go")
-		if !strings.Contains(s, "table users: "+tc.echo) {
-			t.Errorf("%s: strategy echo missing %q", tc.name, tc.echo)
-		}
-		if !strings.Contains(s, "func UpdateUsers(") {
-			t.Errorf("%s: update surface must be enabled", tc.name)
-		}
-	}
-
-	// false:剥离列指令后合法;回显原文且不产更新面。
-	req := loadGoldenRequest(t)
-	users := findTable(req, "users")
-	for _, c := range users.Columns {
-		c.Comment = ""
-	}
-	users.Comment = "用户表 [@pk: id @update: false]"
-	resp, err := Generate(context.Background(), req)
-	if err != nil {
-		t.Fatalf("false: Generate: %v", err)
-	}
-	s := mustFile(t, resp, "users_dynamic_gen.go")
-	if !strings.Contains(s, "table users: [@update: false]") {
-		t.Error("false: strategy echo missing")
-	}
-	if strings.Contains(s, "UpdateUsers") {
-		t.Error("false: must not generate an update surface")
-	}
-}
-
 // TestGenerateUpdateOpFamily 覆盖更新面各 op 分支的生成(SQL/签名/守卫),
 // 包括 datetime between、not_null、jsonb has(左列 cast + 空 JSON 拒绝)、
 // uuid SET cast、int_array && 预设交集、同列重复取首条、显式清单去重排序、
@@ -509,7 +338,7 @@ func TestGenerateUpdateOpFamily(t *testing.T) {
 		},
 		{
 			name: "canonical_dedupe", column: "age",
-			comment: "年龄 [@updatable: in, eq, in]",
+			comment: "年龄 [@updatable: membership, eq, membership]",
 			want: []string{
 				"@updatable: eq, in, not_in",
 				"func (UserTable) WhereAgeEq(v int64) UserUpdateOption",
@@ -709,7 +538,7 @@ func TestGenerateModelImportOverrideSharedPackage(t *testing.T) {
 // 的 WHERE(防止只发射第一条的回归)。
 func TestGenerateMultipleFilters(t *testing.T) {
 	req := loadGoldenRequest(t)
-	setTableComment(req, "users", "用户表 [@default_sort: created_at DESC @pk: id @page: 20/200 @filter: deleted_at is_null age gte 0]")
+	setTableComment(req, "users", "用户表 [@default_sort: created_at DESC @pk: id @filter: deleted_at is_null age gte 0]")
 	resp, err := Generate(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -858,7 +687,7 @@ func TestGenerateEngineGate(t *testing.T) {
 	for _, c := range users.Columns {
 		c.Comment = ""
 	}
-	users.Comment = "用户表 [@pk: id @update: false]"
+	users.Comment = "用户表 [@pk: id]"
 	_, err = Generate(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), `engine "mysql" `+wantMsg) {
 		t.Fatalf("read-only table must be gated too, got: %v", err)
@@ -876,7 +705,7 @@ func TestGenerateEngineGate(t *testing.T) {
 	for _, c := range users.Columns {
 		c.Comment = ""
 	}
-	users.Comment = "用户表 [@pk: id @update: false]"
+	users.Comment = "用户表 [@pk: id]"
 	resp, err := Generate(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Generate(read-only on postgresql): %v", err)

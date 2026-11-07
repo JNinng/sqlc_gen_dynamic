@@ -23,8 +23,7 @@ const goldenOptions = `{
   "runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
   "schema": "public",
   "default_ops": "none",
-  "page_default": 20,
-  "page_max": 200
+  "page": {"default": 20, "max": 200}
 }`
 
 func loadGoldenRequest(t *testing.T) *pb.GenerateRequest {
@@ -144,6 +143,9 @@ func TestGeneratePkOnlyTable(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 	src := mustFile(t, resp, "users_dynamic_gen.go")
+	if !strings.Contains(src, "func ListUsers(") || !strings.Contains(src, "func UsersQuerySchema(") {
+		t.Error("pk-only table must still generate the read surface (List / Schema)")
+	}
 	if strings.Contains(src, "\t\"time\"\n") {
 		t.Errorf("pk-only table must not import \"time\" (no *time.Time params emitted)")
 	}
@@ -157,11 +159,10 @@ func TestGeneratePkOnlyTable(t *testing.T) {
 
 // TestGenerateReadOnlyTimePK 覆盖只读表(无更新面)+ 时间类型主键:@pk 自动
 // 定位矩阵只在更新面启用时生成,读面不得因此残留未使用的 "time" import
-// (否则生成物无法编译)。@update: false 同样覆盖。
+// (否则生成物无法编译)。
 func TestGenerateReadOnlyTimePK(t *testing.T) {
 	for _, tableComment := range []string{
 		"用户表 [@pk: id]",
-		"用户表 [@pk: id @update: false]",
 	} {
 		req := loadGoldenRequest(t)
 		users := findTable(req, "users")
@@ -177,6 +178,9 @@ func TestGenerateReadOnlyTimePK(t *testing.T) {
 			t.Fatalf("%s: Generate: %v", tableComment, err)
 		}
 		s := mustFile(t, resp, "users_dynamic_gen.go")
+		if !strings.Contains(s, "func ListUsers(") {
+			t.Errorf("%s: read-only table must still generate the read surface", tableComment)
+		}
 		if strings.Contains(s, "\t\"time\"\n") {
 			t.Errorf("%s: read-only table must not import \"time\" (no update surface)", tableComment)
 		}
@@ -269,13 +273,13 @@ func TestGenerateNumericCast(t *testing.T) {
 	}
 }
 
-// TestGenerateNumericSortable 覆盖 numeric 列的 @sortable 放行:registry 以
+// TestGenerateNumericSortable 覆盖 numeric 列的 sort 能力位放行:registry 以
 // DataTypeDecimal + Cast "::numeric" 发射,游标取值直通 pgtype.Numeric 模型
 // 字段(编码/解码由 dynq 的 decimal 分支承担)。registry 断言以 balance 字段
 // 块锚定——裸 "Sortable:   true," 对任意列都命中,归因不了 balance。
 func TestGenerateNumericSortable(t *testing.T) {
 	req := loadGoldenRequest(t)
-	setComment(req, "users", "balance", "余额 [元] [@dynamic: range @sortable @hideable @updatable: set]")
+	setComment(req, "users", "balance", "余额 [元] [@dynamic: range, sort @updatable: set]")
 	resp, err := Generate(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -283,12 +287,12 @@ func TestGenerateNumericSortable(t *testing.T) {
 	src := mustFile(t, resp, "users_dynamic_gen.go")
 	balanceRegistry := `Key:        "balance",
 			Column:     "balance",
-			Label:      "余额 [元]",
+			Label:      "balance",
 			DataType:   dynq.DataTypeDecimal,
 			Nullable:   true,
 			Ops:        []dynq.Op{dynq.OpGt, dynq.OpGte, dynq.OpLt, dynq.OpLte, dynq.OpBetween},
 			Sortable:   true,
-			Selectable: true,
+			Visibility: dynq.VisibilityOptional,
 			Hidden:     false,
 			Cast:       "::numeric",`
 	for _, want := range []string{

@@ -365,7 +365,7 @@ func demoSchema() {
 	fmt.Printf("%s\n", out)
 	fmt.Println()
 
-	// @api 选项数据源契约(orders.user_id):前端据此渲染远程选择器——
+	// options.ui 的 api 选项数据源契约(orders.user_id):前端据此渲染远程选择器——
 	// 值控件 options 经 GET /api/v1/users/options 拉取,每项取 id / name。
 	os := gen.OrdersQuerySchema()
 	for _, f := range os.Fields {
@@ -373,7 +373,7 @@ func demoSchema() {
 			continue
 		}
 		apiJSON, _ := json.Marshal(f.API)
-		fmt.Printf("   orders.%s @api 契约: %s\n", f.Field, apiJSON)
+		fmt.Printf("   orders.%s api 契约: %s\n", f.Field, apiJSON)
 	}
 	fmt.Println()
 }
@@ -564,7 +564,7 @@ func demoScopeInAny(ctx context.Context, pool *pgxpool.Pool) {
 }
 
 // demoUpdate 演示动态更新面(typed 门):SET 资格来自 @updatable 的
-// set-capable 形态,WHERE 资格来自 where-capable 形态 + @pk 自动定位矩阵;
+// set-capable 形态,WHERE 资格来自 locate-capable 形态 + @pk 自动定位矩阵;
 // 与 @dynamic / @scope 解耦(权限走先查后改),@filter 不变量可用
 // WithoutFilter 绕过。放在全部查询演示之后,避免改写种子数据影响前序断言。
 func demoUpdate(ctx context.Context, pool *pgxpool.Pool) {
@@ -673,7 +673,7 @@ func demoUpdate(ctx context.Context, pool *pgxpool.Pool) {
 	)
 	showErr("同槽位重复 WhereIDEq × 2", err)
 
-	// ⑩ 无 @pk 表的更新面:sys_resource_grant 只有 where-capable 键列 +
+	// ⑩ 无 @pk 表的更新面:sys_resource_grant 只有 locate-capable 键列 +
 	// set-capable note;零 where 守卫只保证"至少一个条件",调用方自带唯一组合。
 	n, err = gen.UpdateSysResourceGrant(ctx, pool,
 		gen.SysResourceGrantUpdate.SetNote(dynq.Ptr("显式共享")),

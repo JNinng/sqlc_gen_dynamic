@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// ---- @api:mode 推导 ----
+// ---- options.ui api:mode 推导 ----
 
 func TestInferAPIMode(t *testing.T) {
 	base := FieldMeta{API: &FieldAPI{Endpoint: "/x", ValueKey: "id", LabelKey: "name"}}
@@ -34,21 +34,21 @@ func TestInferAPIMode(t *testing.T) {
 	}
 }
 
-// ---- @api:schema 输出 ----
+// ---- options.ui api:schema 输出 ----
 
 func TestBuildSchemaAPI(t *testing.T) {
 	meta := TableMeta{
 		Resource: "orders",
 		Fields: []FieldMeta{
 			{Key: "id", Column: "id", DataType: DataTypeInteger, Sortable: true},
-			{Key: "userId", Column: "user_id", DataType: DataTypeInteger, Selectable: true,
+			{Key: "userId", Column: "user_id", DataType: DataTypeInteger,
 				Ops: []Op{OpEq, OpIn},
 				API: &FieldAPI{Endpoint: "/api/v1/users/options", ValueKey: "id", LabelKey: "name"}},
 			// 显式 mode 声明。
-			{Key: "ownerId", Column: "owner_id", DataType: DataTypeUUID, Selectable: true,
+			{Key: "ownerId", Column: "owner_id", DataType: DataTypeUUID,
 				Ops: []Op{OpEq},
 				API: &FieldAPI{Endpoint: "/api/v1/owners", ValueKey: "id", LabelKey: "name", Mode: "search"}},
-			// @api 与 @internal 互斥(生成期 fail),此处仅验证 internal 列不输出。
+			// UI 元数据不允许落在 @internal 列(生成期 fail),此处仅验证 internal 列不输出。
 			{Key: "secret", Column: "secret", DataType: DataTypeString, Hidden: true,
 				API: &FieldAPI{Endpoint: "/x", ValueKey: "v", LabelKey: "l"}},
 		},
@@ -69,7 +69,7 @@ func TestBuildSchemaAPI(t *testing.T) {
 			t.Fatal("hidden field must not appear in schema")
 		case "id":
 			if s.Fields[i].API != nil {
-				t.Fatal("field without @api must have nil api")
+				t.Fatal("field without options.ui api must have nil api")
 			}
 		}
 	}
@@ -99,26 +99,89 @@ func TestBuildSchemaAPI(t *testing.T) {
 	}
 }
 
-// ---- hideable/selectable 双键:hideable 为主,selectable 过渡期同值双发 ----
+// ---- visibility:三态与缺省 optional,协议校验无感 ----
 
-func TestBuildSchemaHideableKey(t *testing.T) {
+func TestBuildSchemaVisibility(t *testing.T) {
 	meta := TableMeta{
 		Resource: "users",
 		Fields: []FieldMeta{
-			{Key: "id", Column: "id", DataType: DataTypeInteger, Selectable: true},
-			{Key: "name", Column: "name", DataType: DataTypeString, Sortable: true},
+			{Key: "id", Column: "id", DataType: DataTypeInteger, Visibility: VisibilityAlways},
+			{Key: "name", Column: "name", DataType: DataTypeString}, // 零值 → optional
+			{Key: "secret", Column: "secret", DataType: DataTypeString, Visibility: VisibilityHidden},
+			// 纯投影列(op 集为空、不可排序、非 internal)仍进入 fields。
+			{Key: "note", Column: "note", DataType: DataTypeString},
+			{Key: "password", Column: "password", DataType: DataTypeString, Hidden: true},
 		},
 		Tiebreaker:  "id",
 		PageDefault: 20,
 		PageMax:     100,
 	}
-	got := mustJSONFieldNames(t, BuildSchema(meta, nil))
-	// 主键与新键恒同值输出(true 列两个字段都在,false 列两个字段都是 false)。
-	for _, want := range []string{`"hideable":true`, `"selectable":true`, `"hideable":false`, `"selectable":false`} {
-		if !containsStr(got, want) {
-			t.Fatalf("schema JSON missing %s:\n%s", want, got)
+	s := BuildSchema(meta, nil)
+	got := map[string]string{}
+	for _, f := range s.Fields {
+		got[f.Field] = f.Visibility
+	}
+	if got["password"] != "" {
+		t.Fatal("hidden field must not appear in schema")
+	}
+	for field, want := range map[string]string{
+		"id":     "always",
+		"name":   "optional",
+		"secret": "hidden",
+		"note":   "optional",
+	} {
+		if got[field] != want {
+			t.Errorf("%s visibility: got %q want %q", field, got[field], want)
 		}
 	}
+	// 契约键:visibility 存在,hideable/selectable 已移除。
+	js := mustJSONFieldNames(t, s)
+	if !containsStr(js, `"visibility":"hidden"`) {
+		t.Fatalf("schema JSON must carry visibility:\n%s", js)
+	}
+	for _, gone := range []string{`"hideable"`, `"selectable"`} {
+		if containsStr(js, gone) {
+			t.Fatalf("retired schema key %s must not be emitted:\n%s", gone, js)
+		}
+	}
+}
+
+// TestBuildSchemaSelectDisabled 验证 SelectDisabled 从 fields 移除(优先于
+// 可见性);where/sort 禁用仍是减法投影,不改变字段集合。
+func TestBuildSchemaSelectDisabled(t *testing.T) {
+	meta := TableMeta{
+		Resource: "users",
+		Fields: []FieldMeta{
+			{Key: "id", Column: "id", DataType: DataTypeInteger},
+			{Key: "name", Column: "name", DataType: DataTypeString, Ops: []Op{OpEq}, Sortable: true},
+		},
+		Tiebreaker:  "id",
+		PageDefault: 20,
+		PageMax:     100,
+	}
+	cfg, err := NewQueryConfig(meta, DisableSelect("name"), DisableWhere("name"), DisableSort("name"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := BuildSchema(meta, cfg)
+	if len(s.Fields) != 1 || s.Fields[0].Field != "id" {
+		t.Fatalf("SelectDisabled field must be removed from schema: %v", s.Fields)
+	}
+	// where/sort 禁用只清投影,不移除字段。
+	cfg2, err := NewQueryConfig(meta, DisableWhere("name"), DisableSort("name"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2 := BuildSchema(meta, cfg2)
+	for _, f := range s2.Fields {
+		if f.Field == "name" {
+			if f.Sortable || len(f.Ops) != 0 {
+				t.Fatalf("where/sort disabled field must keep field but lose capabilities: %+v", f)
+			}
+			return
+		}
+	}
+	t.Fatal("name must remain in schema when only where/sort are disabled")
 }
 
 func mustJSONFieldNames(t *testing.T, s ResourceSchema) string {
@@ -139,9 +202,9 @@ func containsStr(s, sub string) bool {
 	return false
 }
 
-// ---- 展示注解(@desc/@options/@order):schema 透传与排序 ----
+// ---- UI 元数据(desc / options / order):schema 透传与排序 ----
 
-// TestBuildSchemaAnnotationPassthrough 验证 @desc / @options 透传与 omitempty:
+// TestBuildSchemaAnnotationPassthrough 验证 options.ui 的 desc / options 透传与 omitempty:
 // 已声明字段输出 desc/options 键;未声明字段的 JSON 不含这两个键
 // (存量资源 schema 字节级不变,ETag hash 不漂移)。
 func TestBuildSchemaAnnotationPassthrough(t *testing.T) {
@@ -205,7 +268,7 @@ func TestBuildSchemaAnnotationPassthrough(t *testing.T) {
 	}
 }
 
-// TestBuildSchemaOrderSorting 验证 @order 排序语义:已标注升序在前(@order: 0
+// TestBuildSchemaOrderSorting 验证 options.ui order 排序语义:已标注升序在前(order: 0
 // 属已标注,与 nil 指针可区分)、同号按声明序稳定、未标注保持声明序殿后、
 // 负数合法、Hidden 字段不出现、hash 确定。
 func TestBuildSchemaOrderSorting(t *testing.T) {
@@ -244,9 +307,9 @@ func TestBuildSchemaOrderSorting(t *testing.T) {
 	}
 	// 排序不破坏确定性纯函数:同输入同 hash。
 	if s.Hash() != BuildSchema(meta, nil).Hash() {
-		t.Fatal("schema hash deterministic under @order sorting")
+		t.Fatal("schema hash deterministic under order sorting")
 	}
-	// 不同 @order 视图 hash 可区分。
+	// 不同 order 视图 hash 可区分。
 	unordered := meta
 	for i := range unordered.Fields {
 		unordered.Fields[i].Order = nil

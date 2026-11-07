@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,6 +10,7 @@ import (
 )
 
 // Options 是 sqlc.yaml 中 codegen.options 的形态(§4.4)。
+// 解码严格:未知键 → 生成期 fail(不设兼容期,避免拼写错误静默失效)。
 type Options struct {
 	// Package 产物包名(与块 1 sqlc-gen-go 输出同包时须一致)。
 	Package string `json:"package"`
@@ -20,16 +22,68 @@ type Options struct {
 	Schema string `json:"schema"`
 	// Tables 生成范围;缺省为该 schema 下所有含 @dynamic / @pk / set-capable @updatable 声明的表。
 	Tables []string `json:"tables"`
-	// DefaultOps 未标注列的策略:none | exact | in | range | fuzzy | has。
+	// DefaultOps 未标注列的策略:none | exact | membership | range | fuzzy。
 	// 默认 none(显式声明才生成,防 Params 字段爆炸)。
 	DefaultOps string `json:"default_ops"`
 	// GoTypeOverrides 逃生舱,镜像 sqlc-gen-go 的类型覆盖。
 	GoTypeOverrides []GoTypeOverride `json:"go_type_overrides"`
 	// RuntimeImport dynq 运行时包导入路径。
 	RuntimeImport string `json:"runtime_import"`
-	// PageDefault / PageMax 分页全局默认(表注释 @page 可覆盖)。
-	PageDefault int `json:"page_default"`
-	PageMax     int `json:"page_max"`
+	// Page 分页策略:全局 default/max 与表级覆盖,未声明的字段回落全局值。
+	Page PageOptions `json:"page"`
+	// UI 是前端 UI 元数据:物理表名 → 物理列名 → 列级 UI 声明。
+	// 协议可见性仍由 DDL 注释的 @internal 表达(@internal 列不接受 UI 条目)。
+	UI map[string]map[string]*UIColumn `json:"ui"`
+
+	// globalPageDefault / globalPageMax 是解析后的全局分页策略(内置默认
+	// 20/200 打底,合法区间已在 ParseOptions 校验)。
+	globalPageDefault int
+	globalPageMax     int
+}
+
+// PageOptions 是分页策略。分页是产品与防护策略,不与列定义耦合:
+// 全局 default/max 打底,tables 按物理表名覆盖;未声明的字段回落全局值。
+type PageOptions struct {
+	Default *int                    `json:"default"`
+	Max     *int                    `json:"max"`
+	Tables  map[string]PageOverride `json:"tables"`
+}
+
+// PageOverride 是单表分页覆盖;未声明的字段回落全局值。
+type PageOverride struct {
+	Default *int `json:"default"`
+	Max     *int `json:"max"`
+}
+
+const (
+	builtinPageDefault = 20
+	builtinPageMax     = 200
+)
+
+// UIColumn 是 options.ui 中一列的 UI 元数据。仅作用于前端 schema,
+// 不参与服务端校验,也不改变 List 的默认投影。
+type UIColumn struct {
+	Label      string     `json:"label"`
+	Desc       string     `json:"desc"`
+	Order      *int       `json:"order"`
+	Visibility string     `json:"visibility"` // always | optional | hidden;空 = optional
+	Options    []UIOption `json:"options"`
+	API        *UIAPI     `json:"api"`
+}
+
+// UIOption 是静态字典项。Value 保留原始 JSON 形态(整数/字符串),生成期
+// 按列 dataType 定型;禁止 float64 中转(整数精度与类型歧义)。
+type UIOption struct {
+	Value json.RawMessage `json:"value"`
+	Label string          `json:"label"`
+}
+
+// UIAPI 是远程选项数据源声明。
+type UIAPI struct {
+	Endpoint string `json:"endpoint"`
+	ValueKey string `json:"value_key"`
+	LabelKey string `json:"label_key"`
+	Mode     string `json:"mode"` // single | multi | search;空 = 由 ops 推导
 }
 
 // GoTypeOverride 按列名或 db 类型覆盖 Params 的 Go 类型。
@@ -53,11 +107,11 @@ func ParseOptions(req *pb.GenerateRequest) (*Options, error) {
 		Schema:        "public",
 		DefaultOps:    "none",
 		RuntimeImport: defaultRuntimeImport,
-		PageDefault:   20,
-		PageMax:       200,
 	}
 	if len(req.PluginOptions) > 0 {
-		if err := json.Unmarshal(req.PluginOptions, opts); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(req.PluginOptions))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(opts); err != nil {
 			return nil, fmt.Errorf("unmarshal plugin options: %w", err)
 		}
 	}
@@ -71,19 +125,15 @@ func ParseOptions(req *pb.GenerateRequest) (*Options, error) {
 		opts.Schema = "public"
 	}
 	switch opts.DefaultOps {
-	case "none", "exact", "in", "range", "fuzzy", "has":
+	case "none", "exact", "membership", "range", "fuzzy":
 	default:
-		return nil, fmt.Errorf("invalid default_ops %q (want none|exact|in|range|fuzzy|has)", opts.DefaultOps)
+		return nil, fmt.Errorf("invalid default_ops %q (want none|exact|membership|range|fuzzy)", opts.DefaultOps)
 	}
-	if opts.PageDefault < 1 {
-		opts.PageDefault = 20
+	def, max, err := opts.Page.global()
+	if err != nil {
+		return nil, err
 	}
-	if opts.PageMax < 1 {
-		opts.PageMax = 200
-	}
-	if opts.PageDefault > opts.PageMax {
-		return nil, fmt.Errorf("page_default %d exceeds page_max %d", opts.PageDefault, opts.PageMax)
-	}
+	opts.globalPageDefault, opts.globalPageMax = def, max
 	if opts.ModelImport != "" && opts.ModelPackage == "" {
 		return nil, fmt.Errorf("model_package is required when model_import is set")
 	}
@@ -135,5 +185,55 @@ func ParseOptions(req *pb.GenerateRequest) (*Options, error) {
 	}
 	return opts, nil
 }
+
+// global 返回全局分页策略(未声明取内置默认)并校验 1 ≤ default ≤ max。
+func (p PageOptions) global() (def, max int, err error) {
+	def, max = builtinPageDefault, builtinPageMax
+	if p.Default != nil {
+		def = *p.Default
+	}
+	if p.Max != nil {
+		max = *p.Max
+	}
+	if err := validatePageRange(def, max, "page"); err != nil {
+		return 0, 0, err
+	}
+	return def, max, nil
+}
+
+// forTable 返回某表的分页策略:全局值打底,表级覆盖优先。
+func (p PageOptions) forTable(table string, globalDef, globalMax int) (def, max int, ok bool, err error) {
+	ov, ok := p.Tables[table]
+	if !ok {
+		return globalDef, globalMax, false, nil
+	}
+	def, max = globalDef, globalMax
+	if ov.Default != nil {
+		def = *ov.Default
+	}
+	if ov.Max != nil {
+		max = *ov.Max
+	}
+	if err := validatePageRange(def, max, "page.tables."+table); err != nil {
+		return 0, 0, true, err
+	}
+	return def, max, true, nil
+}
+
+func validatePageRange(def, max int, where string) error {
+	if def < 1 {
+		return fmt.Errorf("%s.default must be a positive integer, got %d", where, def)
+	}
+	if max < 1 {
+		return fmt.Errorf("%s.max must be a positive integer, got %d", where, max)
+	}
+	if def > max {
+		return fmt.Errorf("%s.default %d exceeds %s.max %d", where, def, where, max)
+	}
+	return nil
+}
+
+// visibilityValues 是 visibility 的封闭取值集合。
+var visibilityValues = map[string]bool{"always": true, "optional": true, "hidden": true}
 
 const defaultRuntimeImport = "github.com/jninng/sqlc_gen_dynamic/dynq"

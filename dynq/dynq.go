@@ -68,32 +68,49 @@ type OrderBy struct {
 	Desc  bool      `json:"desc"` // false = ASC
 }
 
+// Visibility 是前端列表可见性(仅影响前端渲染,不参与服务端校验,
+// 也不改变 List 的默认投影)。零值("")与 VisibilityOptional 等价。
+type Visibility string
+
+const (
+	// VisibilityAlways 固定显示,用户不可切换(如 id、名称等固定列)。
+	VisibilityAlways Visibility = "always"
+	// VisibilityOptional 默认显示、可切换(缺省值)。
+	VisibilityOptional Visibility = "optional"
+	// VisibilityHidden 默认收起、可在列设置中展开。
+	VisibilityHidden Visibility = "hidden"
+)
+
 // FieldMeta 是单个字段的生成期元数据,同时驱动解析白名单、禁用校验与 schema 输出
 // (三投影同源,物理上不可能漂移)。
 type FieldMeta struct {
-	Key        FieldName // 逻辑键 camelCase
-	Column     string    // 物理列名 snake_case,仅生成物内部使用
-	Label      string    // 展示文本,取自注释非指令部分
-	DataType   DataType
-	Nullable   bool
-	Ops        []Op // where 能力(生成期白名单,运行期只做减法)
-	Sortable   bool
-	Selectable bool // 纯 UI 提示:服务端 fields 点名白名单 = 全部非 @internal 列(由 @hideable 声明,旧名 @selectable)
-	Hidden     bool // @internal 全能力排除(旧名 @hidden 已弃用)
+	Key      FieldName // 逻辑键 camelCase
+	Column   string    // 物理列名 snake_case,仅生成物内部使用
+	Label    string    // 展示文本(来自 options.ui;缺省回落物理列名)
+	DataType DataType
+	Nullable bool
+	Ops      []Op // where 能力(生成期白名单,运行期只做减法)
+	Sortable bool
+	// Visibility 是前端列表初始显隐(always / optional / hidden)。
+	// 生成器对每个非 @internal 列显式发射该字段(缺省 VisibilityOptional);
+	// 零值仍按 optional 处理,供手写 registry 使用。
+	// 只决定前端渲染,不参与协议校验。
+	Visibility Visibility
+	Hidden     bool // @internal 全能力排除(协议面永不可见)
 	Enum       []string
 	// Cast 是 seek 谓词占位符的显式 cast 后缀(如 "::uuid"),用于文本形态参数
 	// (uuid/enum/decimal 列)与列的空值安全比较;空 = 无需 cast。
 	Cast string
-	// API 非 nil 时,该字段 where 值控件的选项数据源为远程接口(@api 声明)。
+	// API 非 nil 时,该字段 where 值控件的选项数据源为远程接口(options.ui)。
 	// 仅影响前端 schema 输出(选项值动态获取),不参与任何服务端校验路径。
 	API *FieldAPI
-	// Desc 是字段描述(@desc 声明;空 = 未声明),仅进入前端 schema 输出。
+	// Desc 是字段描述(options.ui;空 = 未声明),仅进入前端 schema 输出。
 	Desc string
-	// Order 是前端 schema fields 数组的排序序号(@order 声明;nil = 未标注)。
+	// Order 是前端 schema fields 数组的排序序号(options.ui;nil = 未标注)。
 	// 仅影响 BuildSchema 的输出顺序:已标注字段按序号升序在前,未标注字段
 	// 保持 DDL 声明序殿后;registry 与协议校验保持 DDL 声明序。
 	Order *int
-	// Options 是静态字典选项(@options 声明;空 = 未声明),供前端渲染
+	// Options 是静态字典选项(options.ui;空 = 未声明),供前端渲染
 	// 下拉/多选控件;value 由生成器按列 dataType 定型为 number/string。
 	Options []FieldOption
 }
@@ -101,7 +118,7 @@ type FieldMeta struct {
 // IntPtr 返回 v 的指针,registry 字面量 Order 字段的生成辅助。
 func IntPtr(v int) *int { return &v }
 
-// FieldOption 是 @options 的单个静态字典项,前端消费
+// FieldOption 是 options.ui 的单个静态字典项,前端消费
 // (JSON {"value": ..., "label": ...};value 由生成器定型为 number/string)。
 type FieldOption struct {
 	Value any    `json:"value"`

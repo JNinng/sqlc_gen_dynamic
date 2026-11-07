@@ -36,7 +36,7 @@ func Generate(_ context.Context, req *pb.GenerateRequest) (*pb.GenerateResponse,
 	if err != nil {
 		return nil, err
 	}
-	tables, notices, err := buildTableSpecs(req, opts)
+	tables, err := buildTableSpecs(req, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -49,12 +49,6 @@ func Generate(_ context.Context, req *pb.GenerateRequest) (*pb.GenerateResponse,
 		if len(tables) > 0 {
 			return nil, fmt.Errorf("table %s: engine %q is not supported (this plugin generates PostgreSQL dialect with pgx/v5 only); set engine: postgresql in sqlc.yaml", tables[0].Name, engine)
 		}
-	}
-	// 生成期告警(stderr,不进 stdout——stdout 是 sqlc 协议通道):弃用旧名
-	// 提示与注解无效告警,每条自带 "deprecation: "/"warning: " 分类前缀。
-	// 非 fail:旧名解析为等价能力,提示指向新名与计划移除版本,见 deprecatedDirectives。
-	for _, n := range notices {
-		fmt.Fprintf(os.Stderr, "sqlc_gen_dynamic: %s\n", n)
 	}
 	resp := &pb.GenerateResponse{}
 	for _, spec := range tables {
@@ -145,6 +139,9 @@ func (tc *tableCode) headerSection() (string, error) {
 		}
 		p.Linef("//   column %s.%s: [%s]", spec.Name, c.Physical, strings.Join(c.Directives, " "))
 	}
+	// UI 元数据不来自 DDL 注释:单独标注来源,避免 review 时误以为注释缺声明。
+	p.Line("//")
+	p.Line("// UI 元数据(label / desc / order / visibility / options / api):sqlc.yaml 的 codegen.options.ui")
 	p.Raw(fill(headerSuffix, "pkg", tc.opts.Package))
 	imports, err := tc.importsSection()
 	if err != nil {
@@ -169,7 +166,7 @@ func (tc *tableCode) importsSection() (string, error) {
 			needTime = true
 		}
 		// Set / Where 方法族与 @pk 自动定位矩阵只在更新面启用时生成;
-		// 只读表(无 set-capable 或 @update: false)不得因此引入无用 import。
+		// 只读表(无 set-capable @updatable)不得因此引入无用 import。
 		if spec.UpdateEnabled && (c.SetCapable || hasValueOp(c.UpdateOps) || (spec.ReadEnabled && c.Key == spec.Tiebreaker)) {
 			needTime = true
 		}
@@ -296,6 +293,15 @@ var opConst = map[string]string{
 	"is_null": "dynq.OpIsNull", "not_null": "dynq.OpNotNull", "has": "dynq.OpHas",
 }
 
+// visibilityConst 把可见性映射为 dynq 常量。registry 对每个非 @internal 列
+// 显式发射该字段(缺省 = optional),不依赖 FieldMeta 零值隐式语义。
+var visibilityConst = map[string]string{
+	"":         "dynq.VisibilityOptional",
+	"optional": "dynq.VisibilityOptional",
+	"always":   "dynq.VisibilityAlways",
+	"hidden":   "dynq.VisibilityHidden",
+}
+
 func (tc *tableCode) registrySection() string {
 	spec := tc.spec
 	var p printer
@@ -319,7 +325,16 @@ func (tc *tableCode) registrySection() string {
 			p.Linef("\t\t\tOps:        []dynq.Op{%s},", strings.Join(ops, ", "))
 		}
 		p.Linef("\t\t\tSortable:   %v,", c.Sortable)
-		p.Linef("\t\t\tSelectable: %v,", c.Selectable)
+		// UI 字段(非 @internal)显式发射可见性,不依赖零值隐式语义:
+		// 未声明(含缺省 optional)一律输出 VisibilityOptional,前端拿到的
+		// registry 每列都可见性明确。@internal 列不进 UI,不发射。
+		if !c.Hidden {
+			cst, ok := visibilityConst[c.Visibility]
+			if !ok {
+				cst = visibilityConst[""]
+			}
+			p.Linef("\t\t\tVisibility: %s,", cst)
+		}
 		p.Linef("\t\t\tHidden:     %v,", c.Hidden)
 		if len(c.EnumVals) > 0 {
 			p.Linef("\t\t\tEnum:       []string{%s},", quoteJoin(c.EnumVals))
@@ -335,7 +350,7 @@ func (tc *tableCode) registrySection() string {
 			p.Linef("\t\t\t\tMode:     %q,", c.API.Mode)
 			p.Line("\t\t\t},")
 		}
-		// 展示注解(@label 已并入 Label;@desc/@order/@options 按声明输出)。
+		// UI 元数据(options.ui):desc / order / options 按声明输出(label 已并入 Label)。
 		if c.Desc != "" {
 			p.Linef("\t\t\tDesc:       %q,", c.Desc)
 		}
@@ -351,8 +366,8 @@ func (tc *tableCode) registrySection() string {
 				case string:
 					p.Linef("\t\t\t\t{Value: %q, Label: %q},", v, o.Label)
 				default:
-					// 不可达:parseOptionsDirective 保证 value 仅 int64/string。
-					panic(fmt.Sprintf("column %s: unsupported @options value type %T", c.Physical, o.Value))
+					// 不可达:manifest 解码保证 value 仅 int64/string。
+					panic(fmt.Sprintf("column %s: unsupported options value type %T", c.Physical, o.Value))
 				}
 			}
 			p.Line("\t\t\t},")

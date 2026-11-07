@@ -10,13 +10,14 @@ import (
 // 方法族 / @filter 绕过 / UpdateXxx 执行函数)。
 //
 // 能力边界:
-//   - SET 资格 = @updatable 的 set-capable 形态(auto / set / 显式清单);
-//   - WHERE 资格 = @updatable 的 where-capable 形态(auto / where / 显式清单),
+//   - SET 资格 = @updatable 的 set-capable 形态(裸 / set / 显式清单);
+//   - WHERE 资格 = @updatable 的 locate-capable 形态(裸 / locate / 显式清单),
 //     有 @pk 时另自动附带主键列的完整类型矩阵(定位方法,永不生成 Set);
 //   - 与 @dynamic(读面过滤能力)、@scope(读侧数据权限)、@internal(协议
 //     可见性)完全解耦;
-//   - 无 @pk 表只生成更新面:header + marker + Set / Where + UpdateXxx,
-//     不生成 registry / Params / Parse / List / Count / Schema / 游标。
+//   - 无 @pk 表只生成更新面:header + marker + Set / Where +
+//     UpdateXxx / UpdateXxxReturning,不生成 registry / Params / Parse /
+//     List / Count / Schema / 游标。
 
 // updateOpSuffix 是 op → Where 方法名后缀。与 opSuffix 不同,eq 也显式带
 // Eq:方法名本身承载定位语义(WhereIDEq),而非 Params 的裸字段名槽位。
@@ -94,8 +95,8 @@ func (tc *tableCode) updateSetSection() string {
 	return p.String()
 }
 
-// setCommentLabel 提取注释的非指令部分(即列 label,如"姓名"):折叠空白,
-// 缺省 label(等于物理列名)不重复输出。
+// setCommentLabel 返回列的展示 label(options.ui;缺省为物理列名时不重复
+// 输出):折叠空白。
 func setCommentLabel(c *ColumnSpec) string {
 	label := strings.Join(strings.Fields(c.Label), " ")
 	if label == "" || label == c.Physical {
@@ -125,7 +126,7 @@ type updateWhereField struct {
 
 // updateWhereFields 返回 WHERE 方法族的字段与 op 清单:
 //   - @pk 列自动获得完整类型矩阵(有 @pk 即自动生成定位方法,永不生成 Set);
-//   - 其余列按 where-capable @updatable 的 UpdateOps;
+//   - 其余列按 locate-capable @updatable 的 UpdateOps;
 //   - 同列重复 @updatable 已在 mergeTags 取首条。
 func (tc *tableCode) updateWhereFields() []updateWhereField {
 	var out []updateWhereField

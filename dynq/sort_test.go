@@ -13,8 +13,8 @@ func testMeta() TableMeta {
 		Resource: "users",
 		Table:    "users",
 		Fields: []FieldMeta{
-			{Key: "id", Column: "id", DataType: DataTypeInteger, Sortable: true, Selectable: true, Label: "ID"},
-			{Key: "name", Column: "name", DataType: DataTypeString, Ops: []Op{OpEq, OpContains, OpPrefix}, Sortable: true, Selectable: true, Label: "姓名"},
+			{Key: "id", Column: "id", DataType: DataTypeInteger, Sortable: true, Label: "ID"},
+			{Key: "name", Column: "name", DataType: DataTypeString, Ops: []Op{OpEq, OpContains, OpPrefix}, Sortable: true, Label: "姓名"},
 			{Key: "score", Column: "score", DataType: DataTypeNumber, Nullable: true, Ops: []Op{OpGte, OpLte, OpBetween}, Sortable: true},
 			{Key: "updatedAt", Column: "updated_at", DataType: DataTypeDatetime, Nullable: true, Ops: []Op{OpGte, OpIsNull, OpNotNull}, Sortable: true},
 			{Key: "createdAt", Column: "created_at", DataType: DataTypeDatetime, Ops: []Op{OpBetween, OpGte}, Sortable: true},
@@ -94,7 +94,7 @@ func TestResolveSort(t *testing.T) {
 // 禁用目标为default_sort列_缺省回落仍生效_default_sort是表级不变量:
 // DisableSort 只收窄调用点的显式排序能力,不改写生成期表级声明——
 // 缺省回落依旧带 createdAt(并入投影与游标),与 @filter 不受 DisableWhere
-// 影响同构(取舍记录于 dsl.md §3.3)。
+// 影响同构(取舍记录于 dsl.md §3.2)。
 func TestResolveSort_DisableSortTargetsDefaultSortColumn_DefaultSortStillApplies(t *testing.T) {
 	meta := testMeta()
 	cfg, err := NewQueryConfig(meta, DisableSort("createdAt"))

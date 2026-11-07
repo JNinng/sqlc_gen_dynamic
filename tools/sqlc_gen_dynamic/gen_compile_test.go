@@ -42,7 +42,7 @@ func TestGeneratedCodeCompiles(t *testing.T) {
 					c.Type = &pb.Identifier{Name: "timestamptz"}
 				}
 			}
-			setComment(req, "users", "created_at", "创建时间 [@dynamic: range @sortable]")
+			setComment(req, "users", "created_at", "创建时间 [@dynamic: range, sort]")
 			users.Comment = "用户表 [@default_sort: created_at DESC @pk: id]"
 		}, false)
 	})
@@ -57,7 +57,7 @@ func TestGeneratedCodeCompiles(t *testing.T) {
 				c.Comment = ""
 			}
 			setComment(req, "users", "name", "姓名 [@updatable]")
-			setComment(req, "users", "updated_at", "更新时间 [@dynamic: range, is_null, not_null @sortable @updatable: between, not_null]")
+			setComment(req, "users", "updated_at", "更新时间 [@dynamic: range, is_null, not_null, sort @updatable: between, not_null]")
 			setComment(req, "users", "meta", "元数据 [@dynamic: has @updatable: has]")
 			addColumn(req, "users", "extra", "json", true)
 			setComment(req, "users", "extra", "扩展 [@dynamic: has @updatable: has]")
@@ -135,7 +135,7 @@ func buildGeneratedPackage(t *testing.T, mutate func(*pb.GenerateRequest), model
 	if err != nil {
 		t.Fatalf("ParseOptions: %v", err)
 	}
-	specs, _, err := buildTableSpecs(req, opts)
+	specs, err := buildTableSpecs(req, opts)
 	if err != nil {
 		t.Fatalf("buildTableSpecs: %v", err)
 	}

@@ -2,16 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 	"testing"
 
 	pb "github.com/sqlc-dev/plugin-sdk-go/plugin"
 )
 
-// dsl_test.go:注释 DSL 的生成期 fail 路径、弃用名兼容路径与封闭集合锁定。
+// dsl_test.go:注释 DSL 的生成期 fail 路径、括号配平、options.ui / options.page
+// manifest 与封闭集合锁定。
 // golden 比对见 golden_test.go,更新面产物见 gen_update_test.go。
 
 // TestDirectiveOpSetsFrozen 锁定 @scope / @filter 的封闭 op 集合:防止
@@ -39,6 +39,7 @@ func TestDirectiveOpSetsFrozen(t *testing.T) {
 // TestGenerateDSLFailures 覆盖全部生成期 fail 路径(错误快照)。
 // wantSuccess=true 的 case 是放行分支的反向锚点(同构造下必须生成成功)。
 func TestGenerateDSLFailures(t *testing.T) {
+	const cols = `"runtime_import":"github.com/jninng/sqlc_gen_dynamic/dynq"`
 	cases := []struct {
 		name    string
 		mutate  func(*pb.GenerateRequest)
@@ -49,17 +50,22 @@ func TestGenerateDSLFailures(t *testing.T) {
 		{
 			name:    "internal_combined_with_dynamic",
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@dynamic: exact @internal]") },
-			wantErr: "@internal cannot be combined",
+			wantErr: "@internal cannot be combined with @dynamic",
 		},
 		{
-			name:    "hidden_alias_combined_with_dynamic",
+			name:    "hidden_old_name_unknown",
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@dynamic: exact @hidden]") },
-			wantErr: "@internal cannot be combined",
+			wantErr: "unknown directive @hidden",
 		},
 		{
-			name:    "internal_combined_with_sortable",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@sortable @internal]") },
-			wantErr: "@internal cannot be combined",
+			name:    "selectable_old_name_unknown",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@selectable]") },
+			wantErr: "unknown directive @selectable",
+		},
+		{
+			name:    "sortable_removed",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@sortable]") },
+			wantErr: "unknown directive @sortable",
 		},
 		{
 			name:    "unknown_tag",
@@ -69,17 +75,27 @@ func TestGenerateDSLFailures(t *testing.T) {
 		{
 			name:    "unknown_tag_lists_new_names_only",
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@selectablee]") },
-			wantErr: "allowed for column: @api, @desc, @dynamic, @hideable, @internal, @label, @options, @order, @sortable, @updatable",
+			wantErr: "allowed for column: @dynamic, @internal, @updatable",
 		},
 		{
-			name:    "unknown_column_scope_tag",
+			name:    "page_on_column_unknown",
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@page: 1/10]") },
 			wantErr: "unknown directive @page",
 		},
 		{
 			name:    "unclosed_bracket",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@sortable") },
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@dynamic: exact") },
 			wantErr: "unclosed '['",
+		},
+		{
+			name:    "bare_close_bracket",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 ] [@dynamic: exact]") },
+			wantErr: "unmatched ']'",
+		},
+		{
+			name:    "internal_with_payload",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@internal: yes]") },
+			wantErr: "@internal takes no payload",
 		},
 		{
 			name:    "op_not_supported_by_type",
@@ -105,23 +121,23 @@ func TestGenerateDSLFailures(t *testing.T) {
 					Name:    "statuses",
 					IsArray: true,
 					Type:    &pb.Identifier{Name: "user_status"},
-					Comment: "状态组 [@dynamic: in]",
+					Comment: "状态组 [@dynamic: membership]",
 				})
 			},
 			wantErr: `array type "user_status" is not supported for @dynamic (enum arrays are projection-only)`,
 		},
 		{
-			name: "enum_array_sortable_rejected",
+			name: "enum_array_sort_rejected",
 			mutate: func(r *pb.GenerateRequest) {
 				users := findTable(r, "users")
 				users.Columns = append(users.Columns, &pb.Column{
 					Name:    "statuses",
 					IsArray: true,
 					Type:    &pb.Identifier{Name: "user_status"},
-					Comment: "状态组 [@sortable]",
+					Comment: "状态组 [@dynamic: sort]",
 				})
 			},
-			wantErr: `array type "user_status" is not supported for @sortable (enum arrays are projection-only)`,
+			wantErr: "not supported for sorting",
 		},
 		{
 			name: "enum_array_projection_only_allowed",
@@ -152,11 +168,11 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: `array type "user_status" is not supported for dynamic filtering granted by default_ops; mark the column @internal, or set default_ops: none`,
 		},
 		{
-			name: "default_sort_target_not_sortable",
+			name: "default_sort_target_implicit_sortable",
 			mutate: func(r *pb.GenerateRequest) {
 				setTableComment(r, "users", "用户表 [@default_sort: email DESC @pk: id]")
 			},
-			wantErr: "must declare @sortable",
+			wantSuccess: true,
 		},
 		{
 			name: "default_sort_target_internal",
@@ -174,13 +190,6 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: "@default_sort wants",
 		},
 		{
-			name: "page_default_exceeds_max",
-			mutate: func(r *pb.GenerateRequest) {
-				setTableComment(r, "users", "用户表 [@default_sort: created_at DESC @pk: id @page: 300/200]")
-			},
-			wantErr: "exceeds max",
-		},
-		{
 			name:    "missing_pk",
 			mutate:  func(r *pb.GenerateRequest) { setTableComment(r, "users", "用户表 [@default_sort: created_at DESC]") },
 			wantErr: "missing @pk",
@@ -188,22 +197,20 @@ func TestGenerateDSLFailures(t *testing.T) {
 		{
 			name: "pk_column_nullable",
 			mutate: func(r *pb.GenerateRequest) {
-				setTableComment(r, "users", "用户表 [@pk: age]")
+				setTableComment(r, "users", "用户表 [@pk: birth_date]")
 			},
 			wantErr: "must be NOT NULL",
 		},
 		{
-			// @pk 游标可编码白名单:jsonb tiebreaker 到运行期第二页起才会
-			// 在 EncodeCursor 处失败,生成期先行 fail(fail-fast)。
 			name: "pk_jsonb_not_cursor_encodable",
 			mutate: func(r *pb.GenerateRequest) {
 				users := findTable(r, "users")
 				for _, c := range users.Columns {
 					if c.Name == "meta" {
 						c.NotNull = true
+						c.Comment = ""
 					}
 				}
-				setComment(r, "users", "meta", "元数据 [@dynamic: has]")
 				users.Comment = "用户表 [@pk: meta]"
 			},
 			wantErr: `has unsupported type "jsonb" for cursor encoding`,
@@ -234,32 +241,29 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: "fold to the same camelCase key",
 		},
 		{
-			// sortable 类型限制(int_array):数组 seek 谓词无法参数化。
-			name:    "sortable_int_array",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "tags", "标签 [@sortable]") },
-			wantErr: "@sortable not supported for int_array columns",
+			// sort 能力位复用 int_array 拒绝规则:数组 seek 谓词无法参数化。
+			name:    "sort_int_array",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "tags", "标签 [@dynamic: sort]") },
+			wantErr: "int_array columns cannot be sorted",
 		},
 		{
-			// sortable 类型限制(jsonb):jsonb 排序按结构化比较,对前端无可
-			// 解释语义;仅过滤/投影放行。
-			name:    "sortable_jsonb",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "meta", "元数据 [@sortable]") },
-			wantErr: "@sortable not supported for jsonb columns",
+			// sort 能力位复用 jsonb 拒绝规则:结构化比较对前端无可解释语义。
+			name:    "sort_jsonb",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "meta", "元数据 [@dynamic: sort]") },
+			wantErr: "jsonb columns cannot be sorted",
 		},
 		{
-			// sortable 类型限制(unmapped):不可映射类型在 resolveType 先行拒绝,
-			// validateTable 的 unmapped 分支为防御,不可经声明 @sortable 直达。
-			name: "sortable_unmapped_type",
+			name: "sort_unmapped_type",
 			mutate: func(r *pb.GenerateRequest) {
 				addColumn(r, "users", "extras", "inet", false)
-				setComment(r, "users", "extras", "扩展 [@sortable]")
+				setComment(r, "users", "extras", "扩展 [@dynamic: sort]")
 			},
-			wantErr: "is not supported for dynamic columns",
+			wantErr: "sorting requires a mappable type",
 		},
 		{
-			name:    "tag_with_payload",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@sortable: yes]") },
-			wantErr: "takes no payload",
+			name:    "dynamic_sort_with_payload",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@dynamic: sort: yes]") },
+			wantErr: "unknown @dynamic item",
 		},
 		{
 			name: "unknown_table_in_options",
@@ -275,63 +279,6 @@ func TestGenerateDSLFailures(t *testing.T) {
 				r.PluginOptions = []byte(`{"package":"gen","runtime_import":"github.com/jninng/sqlc_gen_dynamic/dynq","default_ops":"exact"}`)
 			},
 			wantErr: `default_ops "exact" would grant read-side ops but the table has no @pk`,
-		},
-		// ---- @api ----
-		{
-			name: "api_missing_endpoint",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "orders", "user_id", "用户ID [@api: value_key=id label_key=name]")
-			},
-			wantErr: "@api wants",
-		},
-		{
-			name: "api_missing_value_key",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "orders", "user_id", "用户ID [@api: /users/options label_key=name]")
-			},
-			wantErr: "value_key and label_key are required",
-		},
-		{
-			name: "api_missing_label_key",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "orders", "user_id", "用户ID [@api: /users/options value_key=id]")
-			},
-			wantErr: "value_key and label_key are required",
-		},
-		{
-			name: "api_bad_datatype",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "orders", "created_at", "创建时间 [@api: /x value_key=v label_key=l]")
-			},
-			wantErr: "@api not supported for dataType datetime",
-		},
-		{
-			name: "api_internal_combined",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "orders", "user_id", "用户ID [@api: /users/options value_key=id label_key=name @internal]")
-			},
-			wantErr: "@internal cannot be combined",
-		},
-		{
-			name: "api_unknown_key",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "orders", "user_id", "用户ID [@api: /users/options valuekey=id label_key=name]")
-			},
-			wantErr: "unknown @api parameter",
-		},
-		{
-			name: "api_bad_mode",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "orders", "user_id", "用户ID [@api: /users/options value_key=id label_key=name mode=select]")
-			},
-			wantErr: "mode must be single|multi|search",
-		},
-		{
-			name: "api_endpoint_with_query",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "orders", "user_id", "用户ID [@api: /users/options?active=1 value_key=id label_key=name]")
-			},
-			wantErr: "must not contain a query string",
 		},
 		// ---- @scope ----
 		{
@@ -531,7 +478,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 			},
 			wantErr: "unknown directive @filter",
 		},
-		// ---- @update / @updatable(五形态)----
+		// ---- @updatable(四形态)----
 		{
 			name:    "updatable_unknown_item",
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@updatable: bogus]") },
@@ -546,6 +493,21 @@ func TestGenerateDSLFailures(t *testing.T) {
 			name:    "updatable_reserved_mode_mixed",
 			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@updatable: set, eq]") },
 			wantErr: `reserved mode "set" must appear alone`,
+		},
+		{
+			name:    "updatable_auto_keyword_removed",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@updatable: auto]") },
+			wantErr: "@updatable: auto was removed",
+		},
+		{
+			name:    "updatable_false_removed",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@updatable: false]") },
+			wantErr: "@updatable: false was removed",
+		},
+		{
+			name:    "updatable_where_renamed",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@updatable: where]") },
+			wantErr: "@updatable: where was renamed to locate",
 		},
 		{
 			name:    "updatable_op_not_supported_by_type",
@@ -563,64 +525,19 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: "@updatable declares no supported ops",
 		},
 		{
-			name: "updatable_list_on_pk_rejected",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "users", "id", "ID [@updatable: eq]")
-			},
-			wantErr: "must not be set-capable @updatable",
+			name:    "updatable_set_on_pk_rejected",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "id", "ID [@updatable: set]") },
+			wantErr: "is not allowed on the @pk column",
 		},
 		{
-			name:    "update_bad_payload",
-			mutate:  func(r *pb.GenerateRequest) { setTableComment(r, "users", "用户表 [@update: yes @pk: id]") },
-			wantErr: "@update wants true, false, or auto",
+			name:    "updatable_locate_on_pk_rejected",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "id", "ID [@updatable: locate]") },
+			wantErr: "is not allowed on the @pk column",
 		},
 		{
-			name: "update_false_conflicts_with_updatable",
-			mutate: func(r *pb.GenerateRequest) {
-				setTableComment(r, "users", "用户表 [@update: false @pk: id]")
-			},
-			wantErr: "@update: false conflicts with @updatable columns",
-		},
-		{
-			name: "update_true_with_only_false_updatable",
-			mutate: func(r *pb.GenerateRequest) {
-				users := findTable(r, "users")
-				for _, c := range users.Columns {
-					c.Comment = ""
-				}
-				setComment(r, "users", "name", "姓名 [@updatable: false]")
-				users.Comment = "用户表 [@pk: id @update: true]"
-			},
-			wantErr: "no column is set-capable",
-		},
-		{
-			name: "update_true_without_set_capable",
-			mutate: func(r *pb.GenerateRequest) {
-				users := findTable(r, "users")
-				for _, c := range users.Columns {
-					c.Comment = ""
-				}
-				users.Comment = "用户表 [@update: true @pk: id]"
-			},
-			wantErr: "no column is set-capable",
-		},
-		{
-			name: "update_auto_without_set_capable",
-			mutate: func(r *pb.GenerateRequest) {
-				users := findTable(r, "users")
-				for _, c := range users.Columns {
-					c.Comment = ""
-				}
-				users.Comment = "用户表 [@update: auto @pk: id]"
-			},
-			wantErr: "no column is set-capable",
-		},
-		{
-			name: "pk_column_set_capable",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "users", "id", "ID [@dynamic: exact, in @sortable @hideable @updatable]")
-			},
-			wantErr: "must not be set-capable @updatable",
+			name:    "updatable_bare_on_pk_rejected",
+			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "id", "ID [@updatable]") },
+			wantErr: "is not allowed on the @pk column",
 		},
 		{
 			name: "updatable_unmapped_type",
@@ -644,7 +561,7 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: `array type "user_status" is not supported for @updatable`,
 		},
 		{
-			name: "set_capable_without_where_no_pk",
+			name: "set_capable_without_locate_no_pk",
 			mutate: func(r *pb.GenerateRequest) {
 				users := findTable(r, "users")
 				for _, c := range users.Columns {
@@ -653,16 +570,16 @@ func TestGenerateDSLFailures(t *testing.T) {
 				setComment(r, "users", "name", "姓名 [@updatable: set]")
 				users.Comment = "用户表"
 			},
-			wantErr: "requires at least one where-capable @updatable",
+			wantErr: "requires at least one locate-capable @updatable",
 		},
 		{
-			name: "where_capable_without_set",
+			name: "locate_capable_without_set",
 			mutate: func(r *pb.GenerateRequest) {
 				users := findTable(r, "users")
 				for _, c := range users.Columns {
 					c.Comment = ""
 				}
-				setComment(r, "users", "name", "姓名 [@updatable: where]")
+				setComment(r, "users", "name", "姓名 [@updatable: locate]")
 				users.Comment = "用户表 [@pk: id]"
 			},
 			wantErr: "requires at least one set-capable @updatable",
@@ -670,15 +587,15 @@ func TestGenerateDSLFailures(t *testing.T) {
 		{
 			name: "nopk_read_directive",
 			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "sys_resource_grant", "resource", "资源 [@dynamic: eq @updatable: where]")
+				setComment(r, "sys_resource_grant", "resource", "资源 [@dynamic: eq @updatable: locate]")
 			},
 			// 完整上下文文案断言(missing @pk 系列保留一条全文):
 			wantErr: "table sys_resource_grant: missing @pk directive in table comment (primary key is required for deterministic pagination)",
 		},
 		{
-			name: "nopk_sortable_directive",
+			name: "nopk_sort_directive",
 			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "sys_resource_grant", "note", "备注 [@sortable @updatable: set]")
+				setComment(r, "sys_resource_grant", "note", "备注 [@dynamic: sort @updatable: set]")
 			},
 			wantErr: "missing @pk",
 		},
@@ -690,20 +607,6 @@ func TestGenerateDSLFailures(t *testing.T) {
 			wantErr: `@filter column "ghost" not found`,
 		},
 		{
-			name: "nopk_hideable_directive",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "sys_resource_grant", "note", "备注 [@hideable @updatable: set]")
-			},
-			wantErr: "missing @pk",
-		},
-		{
-			name: "nopk_api_directive",
-			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "sys_resource_grant", "note", "备注 [@api: /x value_key=v label_key=l @updatable: set]")
-			},
-			wantErr: "missing @pk",
-		},
-		{
 			name: "nopk_scope_directive",
 			mutate: func(r *pb.GenerateRequest) {
 				setTableComment(r, "sys_resource_grant", "共享授权 [@scope: note eq fn_x(user_id:varchar)]")
@@ -713,97 +616,179 @@ func TestGenerateDSLFailures(t *testing.T) {
 		{
 			name: "nopk_default_sort_directive",
 			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "sys_resource_grant", "note", "备注 [@sortable @updatable: set]")
 				setTableComment(r, "sys_resource_grant", "共享授权 [@default_sort: note ASC]")
 			},
 			wantErr: "missing @pk",
 		},
 		{
-			name: "nopk_page_directive",
+			name: "page_table_directive_removed",
 			mutate: func(r *pb.GenerateRequest) {
 				setTableComment(r, "sys_resource_grant", "共享授权 [@page: 10/20]")
 			},
-			wantErr: "missing @pk",
+			wantErr: "unknown directive @page",
+		},
+		{
+			name: "update_table_directive_removed",
+			mutate: func(r *pb.GenerateRequest) {
+				setTableComment(r, "users", "用户表 [@update @pk: id]")
+			},
+			wantErr: "unknown directive @update",
 		},
 		{
 			name: "updatable_at_table_level",
 			mutate: func(r *pb.GenerateRequest) {
 				setTableComment(r, "users", "用户表 [@updatable @pk: id]")
 			},
-			wantErr: "allowed for table: @default_sort, @filter, @page, @pk, @scope, @update",
+			wantErr: "allowed for table: @default_sort, @filter, @pk, @scope",
 		},
-		// ---- 展示注解(@label/@desc/@order/@options)fail 路径 ----
+		// ---- options.ui manifest fail-closed ----
 		{
-			name:    "label_empty_payload",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@label]") },
-			wantErr: "@label wants a non-empty payload",
-		},
-		{
-			name:    "desc_empty_payload",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@desc:]") },
-			wantErr: "@desc wants a non-empty payload",
-		},
-		{
-			name:    "order_empty_payload",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@order]") },
-			wantErr: `@order wants an integer, got ""`,
-		},
-		{
-			name:    "order_not_integer",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@order: 十]") },
-			wantErr: `@order wants an integer, got "十"`,
-		},
-		{
-			name:    "annotation_at_table_scope",
-			mutate:  func(r *pb.GenerateRequest) { setTableComment(r, "users", "用户表 [@label: 用户 @pk: id]") },
-			wantErr: "unknown directive @label",
-		},
-		{
-			name:    "annotation_payload_unknown_at_word",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "name", "姓名 [@label: 见 @bogusword 说明]") },
-			wantErr: "unknown directive @bogusword",
-		},
-		{
-			name:    "options_empty_payload",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "role", "角色 [@options]") },
-			wantErr: `@options wants "<value>=<label>" pairs separated by spaces, got ""`,
-		},
-		{
-			name:    "options_on_enum_column",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "status", "状态 [@options: active=启用]") },
-			wantErr: "@options not supported for dataType enum",
-		},
-		{
-			name:    "options_on_jsonb_column",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "meta", "元数据 [@options: k=v]") },
-			wantErr: "@options not supported for dataType jsonb",
-		},
-		{
-			name:    "options_value_not_integer",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "age", "年龄 [@options: abc=未知]") },
-			wantErr: `@options value "abc" is not a valid integer (column dataType is integer)`,
-		},
-		{
-			name:    "options_pair_missing_equals",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "role", "角色 [@options: admin]") },
-			wantErr: `@options expects <value>=<label> pairs, got "admin"`,
-		},
-		{
-			name:    "options_empty_label",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "role", "角色 [@options: admin=]") },
-			wantErr: `@options label must be non-empty, got "admin="`,
-		},
-		{
-			name:    "options_duplicate_value",
-			mutate:  func(r *pb.GenerateRequest) { setComment(r, "users", "age", "年龄 [@options: 1=成年 1=未成年]") },
-			wantErr: "@options value 1 declared twice",
-		},
-		{
-			name: "options_combined_with_api",
+			name: "ui_unknown_table",
 			mutate: func(r *pb.GenerateRequest) {
-				setComment(r, "users", "org_id", "组织 [@api: /x value_key=v label_key=l @options: 1=总部]")
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"ghosts":{"id":{"label":"x"}}}}`)
 			},
-			wantErr: "@options cannot be combined with @api (one option source per column)",
+			wantErr: "ui.ghosts: table not found",
+		},
+		{
+			name: "ui_unknown_column",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":{"ghost":{"label":"x"}}}}`)
+			},
+			wantErr: "ui.users.ghost: column not found",
+		},
+		{
+			name: "ui_internal_column",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":{"password":{"label":"x"}}}}`)
+			},
+			wantErr: "@internal column must not carry UI metadata",
+		},
+		{
+			name: "ui_table_without_read_surface",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"sys_resource_grant":{"note":{"label":"x"}}}}`)
+			},
+			wantErr: "no read surface",
+		},
+		{
+			name: "ui_table_not_selected",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"tables":["orders"],"ui":{"users":{"name":{"label":"x"}}}}`)
+			},
+			wantErr: "not selected for generation",
+		},
+		{
+			name: "ui_bad_visibility",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":{"name":{"visibility":"sometimes"}}}}`)
+			},
+			wantErr: "visibility must be always|optional|hidden",
+		},
+		{
+			name: "ui_unknown_key",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":{"name":{"lable":"x"}}}}`)
+			},
+			wantErr: `unknown field "lable"`,
+		},
+		{
+			name: "ui_empty_column_entry",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":{"name":{}}}}`)
+			},
+			wantErr: "entry must not be empty",
+		},
+		{
+			name: "ui_null_table_entry",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":null}}`)
+			},
+			wantErr: "entry must not be null",
+		},
+		{
+			name: "ui_options_and_api_together",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":{"role":{"options":[{"value":"admin","label":"A"}],"api":{"endpoint":"/x","value_key":"id","label_key":"name"}}}}}`)
+			},
+			wantErr: "options cannot be combined with api",
+		},
+		{
+			name: "ui_options_on_enum_column",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":{"status":{"options":[{"value":"active","label":"启用"}]}}}}`)
+			},
+			wantErr: "options not supported for dataType enum",
+		},
+		{
+			name: "ui_options_value_not_integer",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":{"age":{"options":[{"value":"x","label":"A"}]}}}}`)
+			},
+			wantErr: "value must be an integer",
+		},
+		{
+			name: "ui_api_bad_datatype",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui":{"users":{"created_at":{"api":{"endpoint":"/x","value_key":"id","label_key":"name"}}}}}`)
+			},
+			wantErr: "not supported for dataType datetime",
+		},
+		// ---- options.page ----
+		{
+			name: "page_global_default_exceeds_max",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"page":{"default":300,"max":200}}`)
+			},
+			wantErr: "page.default 300 exceeds page.max 200",
+		},
+		{
+			name: "page_table_unknown",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"page":{"tables":{"ghosts":{"default":10}}}}`)
+			},
+			wantErr: "page.tables.ghosts: table not found",
+		},
+		{
+			name: "page_table_not_selected",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"tables":["orders"],"page":{"tables":{"users":{"default":10}}}}`)
+			},
+			wantErr: "not selected for generation",
+		},
+		{
+			name: "page_table_invalid_range",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"page":{"tables":{"users":{"default":500,"max":100}}}}`)
+			},
+			wantErr: "page.tables.users.default 500 exceeds page.tables.users.max 100",
+		},
+		{
+			name: "page_global_default_zero",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"page":{"default":0}}`)
+			},
+			wantErr: "page.default must be a positive integer",
+		},
+		{
+			name: "page_table_max_negative",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"page":{"tables":{"users":{"max":-1}}}}`)
+			},
+			wantErr: "page.tables.users.max must be a positive integer",
+		},
+		{
+			name: "default_ops_has_preset_removed",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"default_ops":"has"}`)
+			},
+			wantErr: `invalid default_ops "has" (want none|exact|membership|range|fuzzy)`,
+		},
+		{
+			name: "unknown_option_key",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"page_default":20}`)
+			},
+			wantErr: `unknown field "page_default"`,
 		},
 	}
 	for _, tc := range cases {
@@ -829,84 +814,6 @@ func TestGenerateDSLFailures(t *testing.T) {
 				t.Fatalf("want error containing %q, got: %v", tc.wantErr, err)
 			}
 		})
-	}
-}
-
-// TestDeprecatedDirectiveAliases 覆盖指令更名的兼容路径(@hidden → @internal、
-// @selectable → @hideable,见 dsl.go deprecatedDirectives):
-//   - 旧名 @hidden / @selectable 解析为等价新名,生成物与新名逐字节一致;
-//   - 旧名触发 deprecation 提示(按列去重),新名零提示;
-//   - 同列新旧名并存时静默合并(别名等价),@hidden 提示至多一条。
-func TestDeprecatedDirectiveAliases(t *testing.T) {
-	oldReq := loadGoldenRequest(t)
-	setComment(oldReq, "users", "password", "密码 [@hidden]")
-	setComment(oldReq, "users", "id", "ID [@selectable]")
-
-	newReq := loadGoldenRequest(t)
-	setComment(newReq, "users", "password", "密码 [@internal]")
-	setComment(newReq, "users", "id", "ID [@hideable]")
-
-	opts, err := ParseOptions(oldReq)
-	if err != nil {
-		t.Fatalf("ParseOptions: %v", err)
-	}
-
-	// 旧名:提示按列去重,内容指向新名与移除版本。
-	_, warns, err := buildTableSpecs(oldReq, opts)
-	if err != nil {
-		t.Fatalf("buildTableSpecs (old names): %v", err)
-	}
-	wantWarns := []string{
-		"deprecation: column users.id: @selectable is deprecated, use @hideable instead (the old name will be removed in v0.6.0)",
-		"deprecation: column users.password: @hidden is deprecated, use @internal instead (the old name will be removed in v0.6.0)",
-	}
-	if len(warns) != len(wantWarns) {
-		t.Fatalf("want %d deprecations, got %d: %v", len(wantWarns), len(warns), warns)
-	}
-	for i, w := range wantWarns {
-		if warns[i] != w {
-			t.Errorf("deprecation[%d]:\n got  %s\n want %s", i, warns[i], w)
-		}
-	}
-
-	// 新名:零提示。
-	if _, warnsNew, err := buildTableSpecs(newReq, opts); err != nil {
-		t.Fatalf("buildTableSpecs (new names): %v", err)
-	} else if len(warnsNew) != 0 {
-		t.Errorf("new names must not trigger deprecations, got %v", warnsNew)
-	}
-
-	// 同列新旧名并存:归一后由 mergeTags 静默合并,@hidden 提示至多一条。
-	bothReq := loadGoldenRequest(t)
-	setComment(bothReq, "users", "password", "密码 [@hidden @internal]")
-	if _, warnsBoth, err := buildTableSpecs(bothReq, opts); err != nil {
-		t.Fatalf("buildTableSpecs (mixed names): %v", err)
-	} else if len(warnsBoth) != 1 || !strings.Contains(warnsBoth[0], "column users.password: @hidden is deprecated") {
-		t.Errorf("mixed names want exactly one @hidden deprecation, got %v", warnsBoth)
-	}
-
-	// 解析等价:旧名与新名的生成物逐字节一致(回显已归一为新名)。
-	oldResp, err := Generate(context.Background(), oldReq)
-	if err != nil {
-		t.Fatalf("Generate (old names): %v", err)
-	}
-	newResp, err := Generate(context.Background(), newReq)
-	if err != nil {
-		t.Fatalf("Generate (new names): %v", err)
-	}
-	if len(oldResp.Files) == 0 {
-		t.Fatal("old/new alias comparison must not pass on empty output")
-	}
-	if len(oldResp.Files) != len(newResp.Files) {
-		t.Fatalf("file count mismatch: %d vs %d", len(oldResp.Files), len(newResp.Files))
-	}
-	for i := range oldResp.Files {
-		if oldResp.Files[i].Name != newResp.Files[i].Name {
-			t.Fatalf("file name mismatch: %s vs %s", oldResp.Files[i].Name, newResp.Files[i].Name)
-		}
-		if string(oldResp.Files[i].Contents) != string(newResp.Files[i].Contents) {
-			t.Errorf("%s: old-name and new-name outputs must be byte-identical", oldResp.Files[i].Name)
-		}
 	}
 }
 
@@ -952,10 +859,10 @@ func TestGoTypeOverrideImportCollected(t *testing.T) {
 
 	t.Run("unreferenced_skipped", func(t *testing.T) {
 		req := loadGoldenRequest(t)
-		// meta 仅为 where-capable(where-only,矩阵仅 has):Where 方法签名硬编码
+		// meta 仅为 locate-capable(locate-only,矩阵仅 has):Where 方法签名硬编码
 		// []byte,不引用 override 类型;birth_date 零能力引用。两者都不得收集。
-		setComment(req, "users", "meta", "[@updatable: where]")
-		setComment(req, "users", "birth_date", "[@updatable: false]")
+		setComment(req, "users", "meta", "[@updatable: locate]")
+		setComment(req, "users", "birth_date", "")
 		req.PluginOptions = []byte(`{
 			"package": "gen",
 			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
@@ -972,9 +879,9 @@ func TestGoTypeOverrideImportCollected(t *testing.T) {
 		if strings.Contains(users, "civil") || strings.Contains(users, "example.com/x") {
 			t.Error("overrides on unreferenced columns must not be collected into imports")
 		}
-		// 收集面收窄不得误伤生成面:where-only has 的定位方法照常生成。
+		// 收集面收窄不得误伤生成面:locate-only has 的定位方法照常生成。
 		if !strings.Contains(users, "func (UserTable) WhereMetaHas(v []byte) UserUpdateOption") {
-			t.Error("where-only has column must keep its Where method")
+			t.Error("locate-only has column must keep its Where method")
 		}
 	})
 
@@ -1323,7 +1230,7 @@ func TestGoTypeOverrideDbTypeForm(t *testing.T) {
 func TestGoTypeOverrideDivergence(t *testing.T) {
 	t.Run("read_value_op_rejected", func(t *testing.T) {
 		req := loadGoldenRequest(t)
-		// org_id 保持夹具的 @dynamic: exact, in(读面值 op),override 为 uuid.UUID。
+		// org_id 保持夹具的 @dynamic: exact, membership(读面值 op),override 为 uuid.UUID。
 		req.PluginOptions = []byte(`{
 			"package": "gen",
 			"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
@@ -1413,14 +1320,13 @@ func TestGoTypeOverrideDivergence(t *testing.T) {
 
 	t.Run("pk_auto_matrix_between_rejected", func(t *testing.T) {
 		// 时间型主键 + 分叉 override:pk 自动定位矩阵含 between,同样发射
-		// lo.After(hi),须拒绝(pk 上 @updatable: where 为惰性声明)。
+		// lo.After(hi),须拒绝(pk 不声明 @updatable,定位矩阵由 @pk 自动授予)。
 		req := loadGoldenRequest(t)
 		users := findTable(req, "users")
 		for _, c := range users.Columns {
 			c.Comment = ""
 			if c.Name == "id" {
 				c.Type = &pb.Identifier{Name: "timestamptz"}
-				c.Comment = "ID [@updatable: where]"
 			}
 		}
 		setComment(req, "users", "name", "姓名 [@updatable: set]")
@@ -1476,153 +1382,300 @@ func TestGoTypeOverrideDivergence(t *testing.T) {
 	})
 }
 
-// TestParseOptionsDirective 覆盖 @options 解析:多对、integer 定型 int64、
-// 负数、string/uuid 定型、label 含后续 '='、零对、缺 '='、空 label、
-// 重复 value、integer 值非法、白名单外 dataType。
-func TestParseOptionsDirective(t *testing.T) {
-	parse := func(dataType, payload string) ([]OptionSpec, error) {
-		return parseOptionsDirective("column t.c", dslTag{Name: "options", Payload: payload}, dataType)
+// TestTypedOptionValue 覆盖 options.ui 静态字典值的类型定型:integer → int64,
+// string/uuid → string,其他 dataType 拒绝;禁止 float64 中转。
+func TestTypedOptionValue(t *testing.T) {
+	cases := []struct {
+		name     string
+		dataType string
+		raw      string
+		want     any
+		wantErr  string
+	}{
+		{"integer", "integer", "0", int64(0), ""},
+		{"negative_integer", "integer", "-3", int64(-3), ""},
+		{"integer_float_rejected", "integer", "1.5", nil, "not a valid integer"},
+		{"integer_string_rejected", "integer", `"1"`, nil, "must be an integer"},
+		{"string", "string", `"admin"`, "admin", ""},
+		{"uuid", "uuid", `"11111111-1111-1111-1111-111111111111"`, "11111111-1111-1111-1111-111111111111", ""},
+		{"enum_unsupported", "enum", `"active"`, nil, "options not supported for dataType enum"},
+		{"jsonb_unsupported", "jsonb", `"k"`, nil, "options not supported for dataType jsonb"},
 	}
-	// 多对解析 + integer 定型 int64。
-	pairs, err := parse("integer", "0=未知 18=成年")
-	if err != nil || len(pairs) != 2 {
-		t.Fatalf("pairs: %+v %v", pairs, err)
-	}
-	if pairs[0].Value != int64(0) || pairs[0].Label != "未知" || pairs[1].Value != int64(18) || pairs[1].Label != "成年" {
-		t.Fatalf("integer typing: %+v", pairs)
-	}
-	// 负数合法。
-	if pairs, err = parse("integer", "-3=欠费"); err != nil || pairs[0].Value != int64(-3) {
-		t.Fatalf("negative: %+v %v", pairs, err)
-	}
-	// string 定型;uuid 同 string(不做格式约束)。
-	if pairs, err = parse("string", "admin=管理员"); err != nil || pairs[0].Value != "admin" || pairs[0].Label != "管理员" {
-		t.Fatalf("string typing: %+v %v", pairs, err)
-	}
-	if pairs, err = parse("uuid", "11111111-1111-1111-1111-111111111111=总部"); err != nil || pairs[0].Value != "11111111-1111-1111-1111-111111111111" {
-		t.Fatalf("uuid typing: %+v %v", pairs, err)
-	}
-	// 首个 '=' 切分,label 可含后续 '='。
-	if pairs, err = parse("string", "1=比例=100"); err != nil || pairs[0].Value != "1" || pairs[0].Label != "比例=100" {
-		t.Fatalf("label with equals: %+v %v", pairs, err)
-	}
-	// 失败路径。
-	if _, err = parse("integer", ""); err == nil || !strings.Contains(err.Error(), `@options wants "<value>=<label>" pairs`) {
-		t.Fatalf("zero pairs: %v", err)
-	}
-	if _, err = parse("string", "admin"); err == nil || !strings.Contains(err.Error(), `@options expects <value>=<label> pairs, got "admin"`) {
-		t.Fatalf("missing equals: %v", err)
-	}
-	if _, err = parse("string", "admin="); err == nil || !strings.Contains(err.Error(), `@options label must be non-empty, got "admin="`) {
-		t.Fatalf("empty label: %v", err)
-	}
-	if _, err = parse("integer", "1=成年 1=未成年"); err == nil || !strings.Contains(err.Error(), "@options value 1 declared twice") {
-		t.Fatalf("duplicate value: %v", err)
-	}
-	if _, err = parse("integer", "abc=未知"); err == nil || !strings.Contains(err.Error(), `@options value "abc" is not a valid integer`) {
-		t.Fatalf("integer mismatch: %v", err)
-	}
-	if _, err = parse("enum", "active=启用"); err == nil || !strings.Contains(err.Error(), "@options not supported for dataType enum") {
-		t.Fatalf("unsupported dataType: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := typedOptionValue(tc.dataType, json.RawMessage(tc.raw))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %#v (%T), want %#v (%T)", got, got, tc.want, tc.want)
+			}
+		})
 	}
 }
 
-// TestAnnotationPayloadSymbolMatrix 锁定 payload 文本符号兼容矩阵(dsl.md §6):
-// 全角标点原样保留、成对方括号保留、连续空格折叠为单个、payload 内 @ 起始词
-// 按新指令分词(白名单内静默改变列能力)、未配对 [ 在注释层 unclosed fail。
-func TestAnnotationPayloadSymbolMatrix(t *testing.T) {
-	findPayload := func(t *testing.T, tags []dslTag, name string) string {
-		t.Helper()
-		tag, ok := findTag(tags, name)
-		if !ok {
-			t.Fatalf("directive @%s missing in %v", name, tags)
-		}
-		return tag.Payload
-	}
-	// 全角标点(：，、（）)与 % 原样保留:指令名只在首个 ASCII ':' 处切分。
-	label, tags, err := parseComment("column t.c", "状态 [@label: 状态：启用（正常）、含%号]")
+// TestCommentBracketBalance 覆盖注释层方括号配平(引号豁免)与人类文本不参与
+// 生成的解析规则。
+func TestCommentBracketBalance(t *testing.T) {
+	// 非 @ 块是纯文档文本,原样跳过;成对方括号合法。
+	tags, err := parseComment("column t.c", "余额 [元] 说明 [已废弃，仅展示] [@dynamic: range]")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("documentation brackets must be legal: %v", err)
 	}
-	if got := findPayload(t, tags, "label"); got != "状态：启用（正常）、含%号" {
-		t.Fatalf("fullwidth payload: %q", got)
+	if len(tags) != 1 || tags[0].Name != "dynamic" || tags[0].Payload != "range" {
+		t.Fatalf("want only @dynamic: range, got %+v", tags)
 	}
-	if label != "状态" {
-		t.Fatalf("free text label: %q", label)
-	}
-	// 成对方括号参与块边界深度计数,原样保留在 payload 中。
-	if _, tags, err = parseComment("column t.c", "说明 [@desc: 数组[0] 起]"); err != nil {
-		t.Fatal(err)
-	}
-	if got := findPayload(t, tags, "desc"); got != "数组[0] 起" {
-		t.Fatalf("paired brackets: %q", got)
-	}
-	// 连续空格折叠为单个(既有分词行为)。
-	if _, tags, err = parseComment("column t.c", "文本 [@label: a   b]"); err != nil {
-		t.Fatal(err)
-	}
-	if got := findPayload(t, tags, "label"); got != "a b" {
-		t.Fatalf("space folding: %q", got)
-	}
-	// payload 内 @ 起始词:白名单内(如误写 @sortable)→ 静默改变列能力,
-	// 分词器无法与真实声明区分——文档警告文案不得出现 @ 起始的词。
-	_, tags, err = parseComment("column t.c", "文本 [@desc: 误写 @sortable 标记]")
+	// 单引号字符串内部的方括号不参与配平,也不终止指令块。
+	tags, err = parseComment("table t", "表 [@filter: name eq 'a]b' @pk: id]")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("brackets inside quotes must be ignored: %v", err)
 	}
-	if _, ok := findTag(tags, "sortable"); !ok {
-		t.Fatalf("@sortable in payload must be tokenized as a directive: %v", tags)
+	if len(tags) != 2 {
+		t.Fatalf("want @filter and @pk, got %+v", tags)
 	}
-	// 未配对 [ → unclosed fail(注释层,已有路径)。
-	if _, _, err = parseComment("column t.c", "说明 [@desc: 数组[0"); err == nil || !strings.Contains(err.Error(), "unclosed '['") {
-		t.Fatalf("unpaired open bracket: %v", err)
+	// 裸 ] → fail。
+	if _, err := parseComment("column t.c", "x ] y"); err == nil || !strings.Contains(err.Error(), "unmatched ']'") {
+		t.Fatalf("bare ']' must fail: %v", err)
+	}
+	// 未闭合 [ → fail;未闭合引号按普通字符处理。
+	if _, err := parseComment("column t.c", "x [y"); err == nil || !strings.Contains(err.Error(), "unclosed '['") {
+		t.Fatalf("unclosed '[' must fail: %v", err)
+	}
+	if _, err := parseComment("column t.c", "it's unbalanced [y"); err == nil || !strings.Contains(err.Error(), "unclosed '['") {
+		t.Fatalf("unclosed quote must not swallow later brackets: %v", err)
+	}
+	// 块外人类文本的撇号不得把裸 ] 当成字符串内容而漏检。
+	if _, err := parseComment("column t.c", "don't ] can't"); err == nil || !strings.Contains(err.Error(), "unmatched ']'") {
+		t.Fatalf("apostrophes in human text must not hide a bare ']': %v", err)
+	}
+	// 块外撇号 + 块内字面量:撇号不能被当作字面量开引号而误报块内 ]。
+	tags, err = parseComment("table t", "it's [@filter: name eq 'a]b' @pk: id]")
+	if err != nil {
+		t.Fatalf("apostrophe before a directive must not break quoted literals: %v", err)
+	}
+	if len(tags) != 2 {
+		t.Fatalf("want @filter and @pk after apostrophe prefix, got %+v", tags)
 	}
 }
 
-// TestInternalAnnotationCombinationWarning:@internal 列上的展示注解 → 生成期
-// 告警(不 fail),随 deprecation 同一通道输出 stderr,注明列位置;internal 列
-// 不进 schema,声明无效。
-func TestInternalAnnotationCombinationWarning(t *testing.T) {
+// TestUIManifestInjection 覆盖 options.ui 注入:label / order / visibility /
+// options / api 落到 registry;未声明 label 的列回落物理列名(注释人类文本
+// 不再参与生成)。
+func TestUIManifestInjection(t *testing.T) {
 	req := loadGoldenRequest(t)
-	setComment(req, "users", "password", "密码 [@internal @updatable @label: 密码文本 @desc: 登录凭据]")
-	opts, err := ParseOptions(req)
+	req.PluginOptions = []byte(`{
+		"package": "gen",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"ui": {
+			"users": {
+				"name": {"label": "姓名UI", "order": 5, "visibility": "hidden"},
+				"age": {"options": [{"value": 0, "label": "未知"}, {"value": 18, "label": "成年"}]},
+				"status": {"desc": "账号状态", "visibility": "always"}
+			},
+			"orders": {
+				"user_id": {"api": {"endpoint": "/api/v1/users/options", "value_key": "id", "label_key": "name", "mode": "search"}}
+			}
+		}
+	}`)
+	resp, err := Generate(context.Background(), req)
 	if err != nil {
-		t.Fatalf("ParseOptions: %v", err)
+		t.Fatalf("Generate: %v", err)
 	}
-	want := "warning: column users.password: @label, @desc on an @internal column has no effect (@internal columns are excluded from the frontend schema)"
-	_, notices, err := buildTableSpecs(req, opts)
-	if err != nil {
-		t.Fatalf("buildTableSpecs: %v", err) // 告警不 fail
+	users := mustFile(t, resp, "users_dynamic_gen.go")
+	// gofmt 会按元素内的最长键对齐,断言按"同一行包含"匹配而非固定空格。
+	hasLine := func(parts ...string) bool {
+		for _, line := range strings.FieldsFunc(users, func(r rune) bool { return r == '\n' }) {
+			ok := true
+			for _, p := range parts {
+				if !strings.Contains(line, p) {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return true
+			}
+		}
+		return false
 	}
-	found := false
-	for _, n := range notices {
-		if n == want {
-			found = true
+	for _, tc := range []struct {
+		name  string
+		parts []string
+	}{
+		{"label", []string{"Label:", `"姓名UI",`}},
+		{"order", []string{"Order:", "dynq.IntPtr(5),"}},
+		{"hidden", []string{"Visibility:", "dynq.VisibilityHidden,"}},
+		{"always", []string{"Visibility:", "dynq.VisibilityAlways,"}},
+		{"desc", []string{"Desc:", `"账号状态",`}},
+		// 未在 manifest 声明的列同样显式发射 optional(不依赖零值隐式)。
+		{"optional_explicit", []string{"Visibility:", "dynq.VisibilityOptional,"}},
+		{"option0", []string{`{Value: int64(0), Label: "未知"},`}},
+		{"option18", []string{`{Value: int64(18), Label: "成年"},`}},
+		// 未声明 UI label 的列回落物理列名,注释人类文本不参与生成。
+		{"label_fallback", []string{"Label:", `"email",`}},
+	} {
+		if !hasLine(tc.parts...) {
+			t.Errorf("users UI manifest surface missing %s (%v)", tc.name, tc.parts)
 		}
 	}
-	if !found {
-		t.Fatalf("warning notice missing, got %v", notices)
+	if strings.Contains(users, `Label:      "电子邮箱"`) {
+		t.Error("comment human text must not become a label")
 	}
+	orders := mustFile(t, resp, "orders_dynamic_gen.go")
+	for _, want := range []string{
+		`API: &dynq.FieldAPI{`,
+		`Endpoint: "/api/v1/users/options",`,
+		`ValueKey: "id",`,
+		`LabelKey: "name",`,
+		`Mode:     "search",`,
+	} {
+		if !strings.Contains(orders, want) {
+			t.Errorf("orders UI api surface missing %q", want)
+		}
+	}
+}
 
-	// stderr 通道:Generate 的告警输出带 sqlc_gen_dynamic: 前缀与列位置,
-	// 与 deprecation 提示同一形态。
-	r, w, err := os.Pipe()
+// TestPagePolicyFromOptions 覆盖 options.page:全局值打底、表级覆盖优先,
+// 文件头不再出现 @page。
+func TestPagePolicyFromOptions(t *testing.T) {
+	req := loadGoldenRequest(t)
+	req.PluginOptions = []byte(`{
+		"package": "gen",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"page": {"default": 30, "max": 300, "tables": {"orders": {"max": 100}}}
+	}`)
+	resp, err := Generate(context.Background(), req)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Generate: %v", err)
 	}
-	oldStderr := os.Stderr
-	os.Stderr = w
-	t.Cleanup(func() { os.Stderr = oldStderr })
-	_, genErr := Generate(context.Background(), req)
-	w.Close()
-	if genErr != nil {
-		t.Fatalf("Generate must succeed with warning only: %v", genErr)
+	users := mustFile(t, resp, "users_dynamic_gen.go")
+	for _, want := range []string{"PageDefault: 30,", "PageMax:     300,"} {
+		if !strings.Contains(users, want) {
+			t.Errorf("users page policy missing %q", want)
+		}
 	}
-	b, err := io.ReadAll(r)
+	orders := mustFile(t, resp, "orders_dynamic_gen.go")
+	for _, want := range []string{"PageDefault: 30,", "PageMax:     100,"} {
+		if !strings.Contains(orders, want) {
+			t.Errorf("orders page override missing %q", want)
+		}
+	}
+	if strings.Contains(users, "@page") {
+		t.Error("header must not echo @page")
+	}
+}
+
+// TestDynamicSortToken 覆盖 @dynamic 的 sort 能力位:只置 Sortable、不生成
+// Params 字段;纯 sort 声明仍应用 default_ops 保留过滤能力。
+func TestDynamicSortToken(t *testing.T) {
+	req := loadGoldenRequest(t)
+	setComment(req, "users", "name", "姓名 [@dynamic: sort]")
+	req.PluginOptions = []byte(`{
+		"package": "gen",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"default_ops": "exact",
+		"tables": ["users"]
+	}`)
+	resp, err := Generate(context.Background(), req)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Generate: %v", err)
 	}
-	if !strings.Contains(string(b), "sqlc_gen_dynamic: warning: column users.password: @label, @desc") {
-		t.Fatalf("stderr output missing warning, got:\n%s", b)
+	s := mustFile(t, resp, "users_dynamic_gen.go")
+	// sort 只置 Sortable:游标取值覆盖 name。
+	wantCursorCase := `case "name":` + "\n\t\t\tvals[i] = row.Name"
+	if !strings.Contains(s, wantCursorCase) {
+		t.Error("@dynamic: sort must make the column sortable")
 	}
+	// default_ops 回落:sort 之外无 op 项时仍授予过滤能力。
+	if !strings.Contains(s, "NameNeq") {
+		t.Error("@dynamic: sort must still apply default_ops filtering")
+	}
+	// sort 是能力位,不生成 Params 字段。
+	if strings.Contains(s, "NameSort") {
+		t.Error("@dynamic: sort must not generate a Params field")
+	}
+	if !strings.Contains(s, "column users.name: [@dynamic: sort]") {
+		t.Error("header echo must list the sort capability token")
+	}
+}
+
+// TestDynamicPresetMembership 锁定预设词表:membership 展开 in+not_in;
+// 裸 in 是普通 op(只 in),不再隐含 not_in;sort 是独立能力位。
+func TestDynamicPresetMembership(t *testing.T) {
+	ops, sortable, err := expandDynamicItems("column t.c", "string", "in", false)
+	if err != nil {
+		t.Fatalf("bare in: %v", err)
+	}
+	if sortable || len(ops) != 1 || ops[0] != "in" {
+		t.Fatalf("bare in must mean only the in op, got ops=%v sortable=%v", ops, sortable)
+	}
+	ops, sortable, err = expandDynamicItems("column t.c", "string", "membership", false)
+	if err != nil {
+		t.Fatalf("membership: %v", err)
+	}
+	if sortable || len(ops) != 2 || ops[0] != "in" || ops[1] != "not_in" {
+		t.Fatalf("membership must expand to in+not_in, got ops=%v sortable=%v", ops, sortable)
+	}
+	ops, sortable, err = expandDynamicItems("column t.c", "string", "sort", false)
+	if err != nil {
+		t.Fatalf("sort: %v", err)
+	}
+	if !sortable || len(ops) != 0 {
+		t.Fatalf("sort is a capability token, got ops=%v sortable=%v", ops, sortable)
+	}
+}
+
+// TestImplicitSortable 锁定隐式排序能力:@default_sort 目标列与 @pk 列即使
+// 没有任何列级指令也进入可排序列(registry Sortable + 游标取值)。
+func TestImplicitSortable(t *testing.T) {
+	req := loadGoldenRequest(t)
+	users := findTable(req, "users")
+	for _, c := range users.Columns {
+		c.Comment = ""
+	}
+	users.Comment = "用户表 [@default_sort: email DESC @pk: id]"
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	s := mustFile(t, resp, "users_dynamic_gen.go")
+	for _, key := range []string{"email", "id"} {
+		if !registryFieldTrue(s, key, "Sortable") {
+			t.Errorf("%s must be implicitly sortable from @default_sort / @pk", key)
+		}
+	}
+	if !strings.Contains(s, `case "email":`) {
+		t.Error("@default_sort target must be included in cursor values")
+	}
+}
+
+// registryFieldTrue 在生成源码的 registry 字面量中定位 Key==key 的元素,
+// 检查其 field 是否为 true(规避 gofmt 对齐宽度差异)。
+func registryFieldTrue(src, key, field string) bool {
+	lines := strings.FieldsFunc(src, func(r rune) bool { return r == '\n' })
+	in := false
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "Key:") && strings.Contains(t, `"`+key+`"`) {
+			in = true
+			continue
+		}
+		if !in {
+			continue
+		}
+		if strings.HasPrefix(t, "},") {
+			in = false
+			continue
+		}
+		if strings.HasPrefix(t, field+":") && strings.Contains(t, "true") {
+			return true
+		}
+	}
+	return false
 }

@@ -1,6 +1,6 @@
 # sqlc_gen_dynamic
 
-sqlc 自定义 codegen 插件:从 DDL 注释 DSL 生成**动态单表 List 查询代码**(运行期组合 WHERE / ORDER BY / 分页 / 返回列),与 sqlc-gen-go 的固定形态查询互补。配套运行时库 `dynq` 与示例工程 `example/`。DSL 完整参考见 [dsl.md](./dsl.md);行级数据权限见 [scope.md](./scope.md);前端 Schema 契约见 [schema.md](./schema.md);设计文档见 [desc.md](./desc.md);外部工程接入见 [usage.md](./usage.md)。
+sqlc 自定义 codegen 插件:从 DDL 注释 DSL 生成**动态单表 List 查询代码**(运行期组合 WHERE / ORDER BY / 分页 / 返回列),与 sqlc-gen-go 的固定形态查询互补。配套运行时库 `dynq` 与示例工程 `example/`。DSL 完整参考见 [dsl.md](./dsl.md);行级数据权限见 [scope.md](./scope.md);前端 Schema 契约见 [schema.md](./schema.md);设计文档见 [desc.md](./desc.md);外部工程接入见 [usage.md](./usage.md);**从旧版升级(破坏性,无兼容期)见 [MIGRATION.md](./MIGRATION.md)**。
 
 ## 环境要求
 
@@ -57,20 +57,20 @@ sha256sum bin/sqlc_gen_dynamic.wasm
 `make sqlc` 后:
 
 - `example/db/gen/models.go`、`queries.sql.go`、`db.go` 等:sqlc-gen-go 产物(模型与固定查询)
-- `example/db/gen/*_dynamic_gen.go`:本插件产物(有 `@pk` 时含读面 registry / 字段常量 / Params / Parse / Schema / List / Count;set-capable `@updatable` 列另含 typed Update 面;无 `@pk` 表只产更新面)
+- `example/db/gen/*_dynamic_gen.go`:本插件产物(有 `@pk` 时含读面 registry / 字段常量 / Params / Parse / Schema / List / Count;set-capable `@updatable` 列另含 typed 更新面;无 `@pk` 表只产更新面)
 
 ## 注释 DSL(生成策略)
 
 > 完整参考(语法规则、列级 / 表级指令、PG 类型 → dataType 映射、能力矩阵、预设展开、操作符语义、校验规则与 fail 条件全集)见 [dsl.md](./dsl.md)。
 
-生成策略全部声明在 DDL 注释中,随迁移版本化。指令必须包裹在 `[ ]` 中且内容以 `@` 起始;不以 `@` 起始的方括号是 label 字面文本(人类注释不误伤)。指令分列级(`@dynamic` / `@sortable` / `@hideable` / `@internal` / `@updatable` / `@api`,以及仅作用于前端 schema 的展示注解 `@label` / `@desc` / `@order` / `@options`;旧名 `@selectable` / `@hidden` 为兼容期别名,生成期有 deprecation 提示)与表级(`@default_sort` / `@page` / `@pk` / `@update` / `@scope` / `@filter`)两类,涵盖过滤 / 排序 / 返回列选择 / 分页 / 行级权限 / 选项数据源 / 服务端固定不变量 / typed 更新面等能力。
+**注释只承载能力指令**,随迁移版本化:列级 `@dynamic`(含 `sort` 能力位)/ `@internal` / `@updatable`,表级 `@default_sort` / `@pk` / `@scope` / `@filter`,涵盖过滤 / 排序 / 行级权限 / 服务端固定不变量 / typed 更新面。指令必须包裹在 `[ ]` 中且内容以 `@` 起始;方括号必须配平(单引号字符串内部除外)。label / desc / order / visibility / options / api 等 UI 元数据走 `sqlc.yaml` 的 `codegen.options.ui`,分页策略走 `options.page`(见 [usage.md](./usage.md));注释里的人类文本不参与生成。旧指令与旧名不做兼容解析,一律生成期 fail。
 
 示例:
 
 ```sql
-COMMENT ON COLUMN users.name     IS '姓名 [@dynamic: fuzzy, exact @sortable @hideable @updatable]';
+COMMENT ON COLUMN users.name     IS '姓名 [@dynamic: fuzzy, exact, sort @updatable]';
 COMMENT ON COLUMN users.password IS '密码 [@internal @updatable]';
-COMMENT ON TABLE  users          IS '用户表 [@default_sort: created_at DESC @pk: id @page: 20/200]';
+COMMENT ON TABLE  users          IS '用户表 [@default_sort: created_at DESC @pk: id]';
 ```
 
 完整示例(users / orders / customers / projects / sys_user / sys_resource_grant / audit_logs,覆盖全指令)见 [dsl.md §8](./dsl.md#8-完整示例) 与 [example/db/schema.sql](./example/db/schema.sql)。
@@ -91,7 +91,7 @@ COMMENT ON TABLE  users          IS '用户表 [@default_sort: created_at DESC @
 }
 ```
 
-**JSON 协议面统一小驼峰(lowerCamelCase)**:请求信封、响应信封、`_query-schema` 输出、`@api` 对象的键一律小驼峰;camelCase 逻辑字段名不变。
+**JSON 协议面统一小驼峰(lowerCamelCase)**:请求信封、响应信封、`_query-schema` 输出、`api` 对象的键一律小驼峰;camelCase 逻辑字段名不变。
 
 ### 键约束
 
@@ -216,18 +216,18 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
 
 ## 动态更新面(typed 门)
 
-> DSL 声明(`@updatable` 五形态、`@update` 载荷)与校验规则见 [dsl.md §2.3 / §3.6](./dsl.md);`@scope` 与写面的边界见 [scope.md](./scope.md)。
+> DSL 声明(`@updatable` 四形态)与校验规则见 [dsl.md §2.2](./dsl.md);`@scope` 与写面的边界见 [scope.md](./scope.md)。
 
 固定形态的 `UPDATE` 由 sqlc 静态查询承担;本插件的更新面面向**列集不定的内部管理操作**:SET 白名单与 WHERE 定位条件都是编译期结构化选项,**协议面(JSON)不进入写面**——客户端可触达的更新仅限按 pk 点行改,条件批量只存在于内部调用方。
 
 | 能力    | 来源                                                | 产物                             |
 | ----- | ------------------------------------------------- | ------------------------------ |
-| SET   | `@updatable` 的 set-capable 形态(`auto` / `set` / 显式清单) | `SetXxx` 选项方法                   |
-| WHERE | where-capable 形态(`auto` / `where` / 显式清单)+ `@pk` 自动定位矩阵 | `WhereXxx` 选项方法(`between` 拆占双槽) |
+| SET   | `@updatable` 的 set-capable 形态(裸 / `set` / 显式清单) | `SetXxx` 选项方法                   |
+| WHERE | locate-capable 形态(裸 / `locate` / 显式清单)+ `@pk` 自动定位矩阵 | `WhereXxx` 选项方法(`between` 拆占双槽) |
 | RETURNING | 全部更新面表;有 `@pk` 的表另产出单行形态 | `UpdateXxxReturning` / `UpdateXxxReturningByPk` |
 
 - **`@pk` 自动定位**:主键列无需声明 `@updatable`,自动获得完整类型矩阵的 Where 方法;主键永不生成 Set。
-- **无 `@pk` 表**:只生成更新面(header + marker + Set / Where + `UpdateXxx`),不生成 registry / Params / Parse / List / Count / Schema / 游标;入选要求 set-capable 与 where-capable 同时满足。零 where 守卫只保证"至少一个条件",**调用方必须自带唯一组合条件**(如全部业务键列),否则会批量改写。
+- **无 `@pk` 表**:只生成更新面(header + marker + Set / Where + `UpdateXxx`),不生成 registry / Params / Parse / List / Count / Schema / 游标;入选要求 set-capable 与 locate-capable 同时满足。零 where 守卫只保证"至少一个条件",**调用方必须自带唯一组合条件**(如全部业务键列),否则会批量改写。
 - **SET 三态**:`NOT NULL` 列 `SetName(v string)`;可空列 `SetRole(v *string)`,`nil` = 显式置 NULL;未调用的列不动;字面量取指针用 `dynq.Ptr`。切片类型(`jsonb` / `int_array`)的 `nil` 在非空列上运行期显式拒绝(`Kind=set`)。
 - **零条件守卫**:零 SET → `Kind=set`;零调用方 WHERE → `Kind=where`(不发全表 UPDATE,也不静默 no-op)。空串模糊定位(`contains` / `prefix` / `suffix`)会退化为匹配全部非 NULL 行,运行期显式拒绝;同一列的 `is_null` + `not_null` 互斥。
 - **`@filter` 与 `WithoutFilter`**:`@filter` 不变量恒定 AND 进 UPDATE 的 WHERE;声明了 `@filter` 的表生成 `XxxUpdate.WithoutFilter()`(整表级绕过、幂等,不豁免零 where 守卫)。
@@ -237,7 +237,7 @@ fetchPage(K): after = cursors[K-1]   // K 从 1 起;回到第 K 页 = 重发该 
 - 返回 `(int64, error)`:n = 实际改写行数,0 = 未命中,不隐式特判。
 - **更新并返回(RETURNING)**:一条 SQL 完成 SET / WHERE / RETURNING,调用方无需更新后回查。基础入口为多行形态 `UpdateXxxReturning(ctx, db, opts...) ([]<模型>, error)`:命中几行返回几行,**行序未定义**(RETURNING 无 ORDER BY,不得做顺序假设),零命中 = 空切片 + nil error。有 `@pk` 的表按主键类型自动判断、额外产出单行形态 `UpdateXxxReturningByPk(ctx, db, pk, opts...) (<模型>, error)`:主键作为必填定位参数内建到 WHERE(与 opts 条件 AND,opts 是可选收窄,不再要求至少一条 Where),零命中 = `pgx.ErrNoRows`;无 `@pk` 的表不产出单行形态。是否产出由生成期按现有类型信息自动判断,不提供 opt-in 开关。
 - **RETURNING 返回行语义**:行值为 SET 表达式求值与 BEFORE 行级触发器改写后的新值(未 SET 的列保留原值,UPDATE 无默认值重算步骤),AFTER 触发器对行的后续修改不回传。RETURNING 只扩大读回:SET 白名单、`@filter` / `WithoutFilter`、零 SET / 零 WHERE 守卫、`@scope` 不参与写面均与 `UpdateXxx` 一致。方言由生成期统一校验:非 `postgresql` 引擎在生成期报错(读面与更新面同一门槛),不新增注解门控,见[环境要求](#环境要求)。
-- 已知限制:`where` 形态不能与显式 op 组合(不支持 `where, eq`);null op 不随 `auto` / `where` 自动授予;同列重复 `@updatable` 取首条。
+- 已知限制:`locate` 形态不能与显式 op 组合;null op 不随裸 / `locate` 自动授予;同列重复 `@updatable` 取首条;`@pk` 列不接受任何 `@updatable` 形态。
 
 ```go
 // @pk 定位 + CAS(SET 与 WHERE 正交,同列可分别出现)
@@ -279,7 +279,7 @@ u, err = gen.UpdateUsersReturningByPk(ctx, db, 7, gen.UserUpdate.SetName("x"))
 
 ## 前端 Schema(UI 契约)
 
-> 完整契约(schema 键表、前端渲染规则、@api 选项数据源)见 [schema.md](./schema.md)。
+> 完整契约(schema 键表、前端渲染规则、`visibility` 三态、api 选项数据源)见 [schema.md](./schema.md)。
 
 每张动态表生成 `UsersQuerySchema(opts ...dynq.QueryOption) dynq.ResourceSchema`,经 `GET /{resource}/_query-schema` 交付,前端据此渲染通用 QueryBuilder——一次开发,全部列表页复用;端点级能力差异(禁用)对前端透明。`ResourceSchema.Hash()` 为内容 hash,可作 ETag 长缓存。
 

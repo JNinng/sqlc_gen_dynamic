@@ -40,5 +40,34 @@ sql:
           runtime_import: "github.com/jninng/sqlc_gen_dynamic/dynq"
           schema: "public"
           default_ops: "none"
-          page_default: 20
-          page_max: 200
+          # 分页策略:全局 default/max + 表级覆盖(表级优先)。
+          page:
+            default: 20
+            max: 200
+            tables:
+              orders: {default: 20, max: 100}
+              customers: {default: 20, max: 100}
+              projects: {default: 20, max: 100}
+          # 前端 UI 元数据:物理表名 → 物理列名 → label / desc / order /
+          # visibility / options / api。
+          ui:
+            users:
+              id: {visibility: always}
+              email: {label: 电子邮箱, order: 10}
+              status: {label: 用户状态, desc: 账号的启用状态, order: 10}
+              age:
+                order: -1
+                options:
+                  - {value: 0, label: 未知}
+                  - {value: 18, label: 成年}
+                  - {value: 65, label: 退休}
+              role:
+                options:
+                  - {value: admin, label: 管理员}
+                  - {value: user, label: 普通用户}
+                  - {value: guest, label: 访客}
+              org_id: {desc: 所属组织的唯一标识}
+              meta: {visibility: hidden}
+            orders:
+              user_id:
+                api: {endpoint: /api/v1/users/options, value_key: id, label_key: name}

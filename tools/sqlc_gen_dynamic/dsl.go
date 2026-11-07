@@ -10,13 +10,13 @@ import (
 )
 
 // 注释 DSL(§5.2/§5.3):指令必须包裹在 [ ] 中且内容以 @ 起始;
-// 不以 @ 起始的方括号是 label 字面文本(人类注释方括号不误伤)。
+// 不以 @ 起始的方括号是纯文档文本,不参与生成。
+// 注释只承载能力指令——label / desc / order / visibility / options / api
+// 等 UI 元数据来自 sqlc.yaml 的 codegen.options.ui(见 options.go)。
 //
-// 列级:<label> [@dynamic: <项,项,...>] [@sortable] [@internal] [@hideable] [@updatable]
-//       (@hidden / @selectable 为弃用旧名,解析期等价归一,见 deprecatedDirectives)
-//       [@api: <endpoint> value_key=<顶层字段名> label_key=<顶层字段名> [mode=<single|multi|search>]]
-// 表级:[@default_sort: <字段> <ASC|DESC>] [@page: <默认>/<上限>] [@pk: <列>]
-//       [@update[: true|false|auto]]
+// 列级:<人类文本> [@dynamic: <sort,项,项,...>] [@internal]
+//       [@updatable[: set|locate|<项,项,...>]]
+// 表级:[@default_sort: <字段> <ASC|DESC>] [@pk: <列>]
 //       [@scope: <列> <op> <函数>(<参数:类型|字面量>,...) ...]
 //       [@filter: <列> <op> [字面量] ...]
 
@@ -25,49 +25,79 @@ type dslTag struct {
 	Payload string
 }
 
-// parseComment 解析注释:返回 label 与指令标签序列。
-// 未闭合的 [ → 生成期 fail;[ ] 内出现白名单外的 @xxx → fail,定位到标签名。
-func parseComment(where, comment string) (label string, tags []dslTag, err error) {
-	fail := func(format string, args ...any) error {
-		return fmt.Errorf("%s: %s", where, fmt.Sprintf(format, args...))
+// parseComment 解析注释,返回指令标签序列。
+// 方括号配平是注释层硬约束:任何未配平的 [ / ](单引号字符串内部除外)
+// → 生成期 fail,定位到表/列;[ ] 内出现白名单外的 @xxx → fail。
+func parseComment(where, comment string) ([]dslTag, error) {
+	if err := checkBracketBalance(where, comment); err != nil {
+		return nil, err
 	}
-	var lbl strings.Builder
+	var tags []dslTag
 	rest := comment
 	for {
 		open := strings.IndexByte(rest, '[')
 		if open < 0 {
-			lbl.WriteString(rest)
 			break
 		}
 		rel := findBlockClose(rest[open+1:])
 		if rel < 0 {
-			return "", nil, fail("unclosed '[' in comment %q", comment)
+			// 配平检查已保证可达性;保留兜底,防御未来修改破坏两者一致性。
+			return nil, fmt.Errorf("%s: unclosed '[' in comment %q", where, comment)
 		}
 		close := open + 1 + rel
-		lbl.WriteString(rest[:open])
 		block := strings.TrimSpace(rest[open+1 : close])
 		if strings.HasPrefix(block, "@") {
-			blockTags, perr := parseDirectiveBlock(block)
-			if perr != nil {
-				return "", nil, fail("%v", perr)
+			blockTags, err := parseDirectiveBlock(block)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %v", where, err)
 			}
 			tags = append(tags, blockTags...)
-		} else {
-			// 非指令块:方括号原样保留为 label 字面文本。
-			lbl.WriteString(rest[open : close+1])
 		}
 		rest = rest[close+1:]
 	}
-	return strings.TrimSpace(lbl.String()), tags, nil
+	return tags, nil
+}
+
+// checkBracketBalance 校验整条注释的方括号配平。单引号字符串内部不参与
+// 计数(@scope / @filter 的字面量可含 [ / ]);引号只在指令块内(depth>0)
+// 才视为字符串定界符——块外的人类文本撇号(如 it's / don't)不能吞掉方括号,
+// 否则裸 ] 会被漏检或合法字面量被误报。
+func checkBracketBalance(where, comment string) error {
+	depth := 0
+	for i := 0; i < len(comment); i++ {
+		switch comment[i] {
+		case '\'':
+			if depth > 0 {
+				if j := strings.IndexByte(comment[i+1:], '\''); j >= 0 {
+					i += j + 1 // 跳到闭引号,内部方括号不计
+				}
+			}
+		case '[':
+			depth++
+		case ']':
+			if depth == 0 {
+				return fmt.Errorf("%s: unmatched ']' in comment %q", where, comment)
+			}
+			depth--
+		}
+	}
+	if depth != 0 {
+		return fmt.Errorf("%s: unclosed '[' in comment %q", where, comment)
+	}
+	return nil
 }
 
 // findBlockClose 返回块终止 ']' 在 s(块内容,不含开括号)中的下标;
 // 块内成对的 [ ] 不终止块(如 @scope 类型标记 int[]/varchar[]),
-// 仅未配对的 ']' 终止。
+// 单引号字符串内部的方括号不计,仅未配对的 ']' 终止。
 func findBlockClose(s string) int {
 	depth := 0
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
+		case '\'':
+			if j := strings.IndexByte(s[i+1:], '\''); j >= 0 {
+				i += j + 1
+			}
 		case '[':
 			depth++
 		case ']':
@@ -114,60 +144,24 @@ func parseDirectiveBlock(block string) ([]dslTag, error) {
 	return tags, nil
 }
 
-// deprecatedDirectives 是弃用旧名 → 等价新名的别名表(兼容期):
-// @hidden → @internal(服务端内部列,协议面全排除);
-// @selectable → @hideable(列头可显隐交互,纯 UI 提示)。
-// 旧名继续解析为等价能力,但生成期输出 deprecation 提示。
-var deprecatedDirectives = map[string]string{"hidden": "internal", "selectable": "hideable"}
-
-// deprecationRemovalVersion 是弃用旧名计划移除的版本(提示与文档共用同一口径)。
-const deprecationRemovalVersion = "v0.6.0"
-
-// normalizeTagNames 把弃用旧名归一为等价新名,并按声明序返回去重后的
-// deprecation 提示(每个旧名至多一条,由调用方附加上下文)。归一在 mergeTags
-// 之前执行:同列新旧名并存时静默合并为一条——别名等价,不是冲突。
-func normalizeTagNames(tags []dslTag) ([]dslTag, []string) {
-	out := make([]dslTag, len(tags))
-	warned := map[string]bool{}
-	var warns []string
-	for i, t := range tags {
-		if newName, dep := deprecatedDirectives[t.Name]; dep {
-			if !warned[t.Name] {
-				warned[t.Name] = true
-				warns = append(warns, fmt.Sprintf("@%s is deprecated, use @%s instead (the old name will be removed in %s)",
-					t.Name, newName, deprecationRemovalVersion))
-			}
-			t.Name = newName
-		}
-		out[i] = t
-	}
-	return out, warns
-}
-
 // validateTagNames 校验指令名在作用域白名单内,杜绝静默忽略导致的能力丢失。
-// 白名单含兼容期旧名,但报错文案只列新名——旧名可解析,不应再写进新 DDL。
+// 注释只承载能力指令:UI 元数据走 options.ui,旧名与已删指令一律按未知
+// 指令 fail(无兼容期)。
 func validateTagNames(where, scope string, tags []dslTag) error {
 	var allowed map[string]bool
 	if scope == "column" {
 		allowed = map[string]bool{
-			"dynamic": true, "sortable": true, "internal": true, "hideable": true,
-			"updatable": true, "api": true,
-			"label": true, "desc": true, "order": true, "options": true,
-			"hidden": true, "selectable": true, // 弃用旧名(兼容期别名)
+			"dynamic": true, "internal": true, "updatable": true,
 		}
 	} else {
 		allowed = map[string]bool{
-			"default_sort": true, "page": true, "pk": true, "update": true,
-			"scope": true, "filter": true,
+			"default_sort": true, "pk": true, "scope": true, "filter": true,
 		}
 	}
 	for _, t := range tags {
 		if !allowed[t.Name] {
 			var names []string
 			for name := range allowed {
-				if _, dep := deprecatedDirectives[name]; dep {
-					continue
-				}
 				names = append(names, "@"+name)
 			}
 			sort.Strings(names) // 排序保证报错信息稳定
@@ -201,66 +195,42 @@ func findTag(tags []dslTag, name string) (dslTag, bool) {
 	return dslTag{}, false
 }
 
-// parsePageDirective 解析 @page: "<default>/<max>"。
-func parsePageDirective(where string, t dslTag) (def, max int, err error) {
-	parts := strings.SplitN(t.Payload, "/", 2)
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("%s: @page wants \"<default>/<max>\", got %q", where, t.Payload)
-	}
-	def, err = strconv.Atoi(strings.TrimSpace(parts[0]))
-	if err != nil || def < 1 {
-		return 0, 0, fmt.Errorf("%s: @page default must be a positive integer, got %q", where, parts[0])
-	}
-	max, err = strconv.Atoi(strings.TrimSpace(parts[1]))
-	if err != nil || max < 1 {
-		return 0, 0, fmt.Errorf("%s: @page max must be a positive integer, got %q", where, parts[1])
-	}
-	if def > max {
-		return 0, 0, fmt.Errorf("%s: @page default %d exceeds max %d", where, def, max)
-	}
-	return def, max, nil
-}
-
-// parseUpdateDirective 解析表级 @update 开关:
-//   - 缺省(不写指令)= auto;
-//   - 裸 @update = true;
-//   - true / auto 开启,false 关闭;其他 payload → fail。
-//
-// 第二返回值是策略来源回显原文(裸形态回显为 @update)。
-func parseUpdateDirective(where string, t dslTag) (enabled bool, echo string, err error) {
-	switch t.Payload {
-	case "":
-		return true, "@update", nil
-	case "true", "auto":
-		return true, "@update: " + t.Payload, nil
-	case "false":
-		return false, "@update: false", nil
-	default:
-		return false, "", fmt.Errorf("%s: @update wants true, false, or auto, got %q", where, t.Payload)
-	}
-}
-
 // updatableModes 是 @updatable 的保留形态词:保留字只能单独出现,
 // 与显式 op 清单混写 → 生成期 fail。
-var updatableModes = map[string]bool{"auto": true, "set": true, "where": true, "false": true}
+var updatableModes = map[string]bool{"set": true, "locate": true}
 
-// parseUpdatableMode 解析 @updatable 的五形态:
-//   - 裸 / auto        → SET + WHERE(类型能力矩阵);
-//   - set              → 仅 SET;
-//   - where            → 仅 WHERE(类型能力矩阵);
-//   - false            → SET / WHERE 都不生成(惰性声明);
-//   - <preset|op>, ... → SET + WHERE(显式清单,auto 失效)。
+// parseUpdatableMode 解析 @updatable 的四形态:
+//   - 裸              → SET + WHERE(类型能力矩阵);
+//   - set             → 仅 SET;
+//   - locate          → 仅 WHERE(类型能力矩阵);
+//   - <preset|op>, ... → SET + WHERE(显式清单)。
+//
+// 已删除的拼写(auto / false / where)给出定向错误,不做兼容解析。
 func parseUpdatableMode(where string, payload string) (string, error) {
 	switch payload {
-	case "", "auto":
+	case "":
 		return "auto", nil
-	case "set", "where", "false":
+	case "set", "locate":
 		return payload, nil
+	case "auto":
+		return "", fmt.Errorf("%s: @updatable: auto was removed; bare @updatable is already auto (drop the keyword)", where)
+	case "false":
+		return "", fmt.Errorf("%s: @updatable: false was removed; omit the directive instead (no @updatable means no update capability)", where)
+	case "where":
+		return "", fmt.Errorf("%s: @updatable: where was renamed to locate; write @updatable: locate", where)
 	}
 	for _, raw := range strings.Split(payload, ",") {
 		item := strings.TrimSpace(raw)
 		if item == "" {
 			return "", fmt.Errorf("%s: empty @updatable item", where)
+		}
+		switch item {
+		case "auto":
+			return "", fmt.Errorf("%s: @updatable: auto was removed; bare @updatable is already auto (drop the keyword)", where)
+		case "false":
+			return "", fmt.Errorf("%s: @updatable: false was removed; omit the directive instead (no @updatable means no update capability)", where)
+		case "where":
+			return "", fmt.Errorf("%s: @updatable: where was renamed to locate; write @updatable: locate", where)
 		}
 		if updatableModes[item] {
 			return "", fmt.Errorf("%s: @updatable reserved mode %q must appear alone (got %q)", where, item, payload)
@@ -275,14 +245,15 @@ func updatableEcho(c *ColumnSpec) string {
 	switch c.UpdatableMode {
 	case "auto":
 		return "@updatable"
-	case "set", "where", "false":
+	case "set", "locate":
 		return "@updatable: " + c.UpdatableMode
 	default:
 		return "@updatable: " + strings.Join(c.UpdateOps, ", ")
 	}
 }
 
-// APISpec 是 @api 指令的解析结果(插件侧;dynq.FieldAPI 为运行期形态)。
+// APISpec 是 options.ui 的 api 声明(插件侧;dynq.FieldAPI 为运行期形态)。
+// 声明校验见 catalog.go 的 validateUIAPI。
 type APISpec struct {
 	Endpoint string
 	ValueKey string
@@ -290,55 +261,9 @@ type APISpec struct {
 	Mode     string // single | multi | search;空 = 由 ops 推导
 }
 
-// parseAPIDirective 解析 @api: "<endpoint> value_key=<...> label_key=<...> [mode=...]"。
-//   - endpoint:相对前端 baseURL 的路径,禁止 '?'(查询参数由前端按协议拼);
-//   - value_key / label_key:必填,items 中的顶层字段名(复用 ListXxx 时即模型字段名);
-//   - mode:可选,缺省由列 ops 推导(in → multi、fuzzy → search、否则 single)。
-func parseAPIDirective(where string, t dslTag) (*APISpec, error) {
-	fields := strings.Fields(t.Payload)
-	if len(fields) == 0 {
-		return nil, fmt.Errorf("%s: @api wants \"<endpoint> value_key=<...> label_key=<...> [mode=...]\"", where)
-	}
-	spec := &APISpec{Endpoint: fields[0]}
-	if strings.ContainsAny(spec.Endpoint, "?") {
-		return nil, fmt.Errorf("%s: @api endpoint must not contain a query string, got %q", where, spec.Endpoint)
-	}
-	if strings.Contains(spec.Endpoint, "=") {
-		// 首 token 是 key=value(漏写 endpoint)而非路径。
-		return nil, fmt.Errorf("%s: @api wants \"<endpoint> value_key=<...> label_key=<...> [mode=...]\"", where)
-	}
-	for _, kv := range fields[1:] {
-		key, value, ok := strings.Cut(kv, "=")
-		if !ok || key == "" || value == "" {
-			return nil, fmt.Errorf("%s: @api expects key=value parameters, got %q", where, kv)
-		}
-		switch key {
-		case "value_key":
-			spec.ValueKey = value
-		case "label_key":
-			spec.LabelKey = value
-		case "mode":
-			switch value {
-			case "single", "multi", "search":
-				spec.Mode = value
-			default:
-				return nil, fmt.Errorf("%s: @api mode must be single|multi|search, got %q", where, value)
-			}
-		default:
-			return nil, fmt.Errorf("%s: unknown @api parameter %q (want value_key|label_key|mode)", where, key)
-		}
-	}
-	if spec.Endpoint == "" {
-		return nil, fmt.Errorf("%s: @api endpoint is required", where)
-	}
-	if spec.ValueKey == "" || spec.LabelKey == "" {
-		return nil, fmt.Errorf("%s: @api value_key and label_key are required", where)
-	}
-	return spec, nil
-}
-
 // parseDefaultSortDirective 解析 @default_sort: "<column> <ASC|DESC>"。
-// 目标列为物理列名;存在性、@sortable、非 @internal 在表级校验。
+// 目标列为物理列名;存在性、非 @internal 与可排序类型在表级校验。
+// 目标列隐式获得排序能力,无需列级声明。
 func parseDefaultSortDirective(where string, t dslTag) (column string, desc bool, err error) {
 	parts := strings.Fields(t.Payload)
 	if len(parts) != 2 {
@@ -355,73 +280,12 @@ func parseDefaultSortDirective(where string, t dslTag) (column string, desc bool
 	return parts[0], desc, nil
 }
 
-// parseLabelLikeDirective 解析自由文本注解(@label / @desc)的 payload:
-// 非空校验唯一(payload 在上游分词已折叠连续空格)。
-func parseLabelLikeDirective(where, name, payload string) (string, error) {
-	if payload == "" {
-		return "", fmt.Errorf("%s: @%s wants a non-empty payload", where, name)
-	}
-	return payload, nil
-}
-
-// parseOrderDirective 解析 @order 的 payload 为排序序号整数(可负)。
-func parseOrderDirective(where string, t dslTag) (int, error) {
-	n, err := strconv.Atoi(t.Payload)
-	if err != nil {
-		return 0, fmt.Errorf("%s: @order wants an integer, got %q", where, t.Payload)
-	}
-	return n, nil
-}
-
-// OptionSpec 是 @options 的一项静态字典项(插件侧;dynq.FieldOption 为运行期形态)。
+// OptionSpec 是一项静态字典项(生成期形态;dynq.FieldOption 为运行期形态)。
+// 来源为 options.ui 的 options 列表,value 按列 dataType 定型:
+// integer → int64,string/uuid → string。
 type OptionSpec struct {
-	Value any // 生成期按列 dataType 定型:integer → int64,string/uuid → string
+	Value any
 	Label string
-}
-
-// parseOptionsDirective 解析 @options 的 payload:空白分隔的 "<value>=<label>"
-// 对(首个 '=' 切分,label 可含后续 '=',不得含空白)。零对、缺 '=' 或 label
-// 为空 → 生成期 fail;value 按 dataType 定型(integer → int64,解析失败 fail;
-// string/uuid → string),重复 value → fail。
-func parseOptionsDirective(where string, t dslTag, dataType string) ([]OptionSpec, error) {
-	fail := func(format string, args ...any) error {
-		return fmt.Errorf("%s: %s", where, fmt.Sprintf(format, args...))
-	}
-	items := strings.Fields(t.Payload)
-	if len(items) == 0 {
-		return nil, fail(`@options wants "<value>=<label>" pairs separated by spaces, got %q`, t.Payload)
-	}
-	out := make([]OptionSpec, 0, len(items))
-	seen := map[string]bool{}
-	for _, item := range items {
-		value, label, ok := strings.Cut(item, "=")
-		if !ok {
-			return nil, fail("@options expects <value>=<label> pairs, got %q", item)
-		}
-		if label == "" {
-			return nil, fail("@options label must be non-empty, got %q", item)
-		}
-		var typed any
-		switch dataType {
-		case "integer":
-			n, err := strconv.ParseInt(value, 10, 64)
-			if err != nil {
-				return nil, fail("@options value %q is not a valid integer (column dataType is integer)", value)
-			}
-			typed = n
-		case "string", "uuid":
-			typed = value
-		default:
-			return nil, fail("@options not supported for dataType %s (want integer|uuid|string fields)", dataType)
-		}
-		key := fmt.Sprint(typed)
-		if seen[key] {
-			return nil, fail("@options value %s declared twice", key)
-		}
-		seen[key] = true
-		out = append(out, OptionSpec{Value: typed, Label: label})
-	}
-	return out, nil
 }
 
 // scopeGuard 是 @scope 声明的一项守卫:目标列、谓词操作符、守卫函数与实参列表。
@@ -574,9 +438,10 @@ func isScopeIdentRune(c rune, first bool) bool {
 
 // parseScopeDirective 解析 @scope: "<列> <op> <函数>(<参数,...>) ..."。
 //   - 列:目标物理列名(snake_case),存在性在表级校验;同列仅允许一条守卫;
-//   - op:封闭集合 in|eq|gt|gte|lt|lte(in = 集合守卫,其余为标量比较);
+//   - op:封闭集合 in|in_any|eq|gt|gte|lt|lte(in = 集合守卫,in_any = 数组三态
+//     守卫,其余为标量比较);
 //   - 函数:小写标识符(可带一层 schema 限定);本体不在 sqlc catalog,
-//     不做存在性校验(与 @api endpoint 同一信任级别),由部署侧保证;
+//     不做存在性校验(与 options.ui api endpoint 同一信任级别),由部署侧保证;
 //   - 实参:标识符参数 "name:type"(类型取词表,值来自生成的 Scope 结构体)
 //     或字面量参数('字符串'/整数,校验后内联进 SQL)。允许零参。
 func parseScopeDirective(where string, t dslTag) ([]scopeGuard, error) {

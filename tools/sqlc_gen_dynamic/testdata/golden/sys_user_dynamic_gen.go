@@ -18,7 +18,7 @@ import (
 	dynq "github.com/jninng/sqlc_gen_dynamic/dynq"
 )
 
-// sysUserRegistry 是本表的生成期元数据:协议校验白名单、typed 查询参数与前端
+// sys_userRegistry 是本表的生成期元数据:协议校验白名单、typed 查询参数与前端
 // schema 均由该元数据生成,三者由构造保证一致。运行期能力为 registry 能力
 // 减去 opts 禁用项(纯减法,只能禁用不能开启)。
 var sys_userRegistry = dynq.TableMeta{

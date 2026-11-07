@@ -300,7 +300,6 @@ func (tc *tableCode) registrySection() string {
 	spec := tc.spec
 	var p printer
 	p.Raw(fill(registryDoc,
-		"docReg", lowerFirst(spec.Singular),
 		"reg", tc.reg,
 		"resource", strconv.Quote(spec.Resource),
 		"table", strconv.Quote(tableNameQualified(spec.Name, tc.opts)),

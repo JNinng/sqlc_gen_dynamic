@@ -867,11 +867,13 @@ func scopeParamsOf(where string, guards []scopeGuard) ([]scopeParam, error) {
 	return out, nil
 }
 
-// applyUIManifest 把 options.ui 注入入选表的列元数据。表/列键使用物理
-// snake_case 名;表必须存在、被生成范围选中且有读面,列必须存在且非
-// @internal,否则死配置 fail(不静默忽略)。
+// applyUIManifest 把 options.ui 与 options.ui_defaults 注入入选表的列元数据。
+// 表/列键使用物理 snake_case 名;兜底按列名命中每张入选读面表中同名的
+// 非 @internal 列,表级条目逐字段覆盖(未声明字段继承兜底值)。
+// 表条目必须指向存在、被选中且有读面的表与非 @internal 列;兜底条目必须
+// 至少命中一个可见列,否则死配置 fail(不静默忽略)。
 func applyUIManifest(schema *pb.Schema, selected []*TableSpec, opts *Options) error {
-	if len(opts.UI) == 0 {
+	if len(opts.UI) == 0 && len(opts.UIDefaults) == 0 {
 		return nil
 	}
 	all := make(map[string]bool, len(schema.Tables))
@@ -882,6 +884,7 @@ func applyUIManifest(schema *pb.Schema, selected []*TableSpec, opts *Options) er
 	for _, spec := range selected {
 		sel[spec.Name] = spec
 	}
+	// 表级条目沿既有规则校验;先于兜底应用,保证显式配置的错误优先暴露。
 	for _, tableName := range sortedKeys(opts.UI) {
 		cols := opts.UI[tableName]
 		if cols == nil {
@@ -913,12 +916,104 @@ func applyUIManifest(schema *pb.Schema, selected []*TableSpec, opts *Options) er
 			if c.Hidden {
 				return fmt.Errorf("%s: @internal column must not carry UI metadata (it never enters the frontend schema)", where)
 			}
+		}
+	}
+	for _, colName := range sortedKeys(opts.UIDefaults) {
+		meta := opts.UIDefaults[colName]
+		if meta == nil {
+			return fmt.Errorf("ui_defaults.%s: entry must not be null", colName)
+		}
+		if meta.isEmpty() {
+			return fmt.Errorf("ui_defaults.%s: entry must not be empty (dead configuration)", colName)
+		}
+	}
+
+	// 应用:兜底先落到每张入选读面表的可见同名列,表级条目按字段覆盖。
+	// @internal 是更强的声明(协议面永不可见),兜底不应用于该列。
+	used := map[string]bool{}
+	for _, spec := range selected {
+		if !spec.ReadEnabled {
+			continue
+		}
+		for i := range spec.Columns {
+			c := &spec.Columns[i]
+			defMeta := opts.UIDefaults[c.Physical]
+			var tableMeta *UIColumn
+			if cols := opts.UI[spec.Name]; cols != nil {
+				tableMeta = cols[c.Physical]
+			}
+			if defMeta == nil && tableMeta == nil {
+				continue
+			}
+			if c.Hidden {
+				// 表级条目命中的 @internal 列已在前置校验 fail;此处只可能是
+				// 兜底条目,@internal 优先,不应用也不计入命中。
+				continue
+			}
+			meta := mergeUIColumn(defMeta, tableMeta)
+			where := uiManifestWhere(spec.Name, c.Physical, defMeta != nil, tableMeta != nil)
 			if err := applyUIColumn(where, c, meta); err != nil {
 				return err
 			}
+			if defMeta != nil {
+				used[c.Physical] = true
+			}
+		}
+	}
+	for _, colName := range sortedKeys(opts.UIDefaults) {
+		if !used[colName] {
+			return fmt.Errorf("ui_defaults.%s: column not found in any selected read-side table (dead configuration; missing, unselected, or @internal)", colName)
 		}
 	}
 	return nil
+}
+
+// uiManifestWhere 生成 UI 校验错误的定位前缀。兜底与表级条目同时存在时
+// 两者都列出,避免类型/枚举错误被归因到只写了 label 的表级条目。
+func uiManifestWhere(table, column string, hasDefault, hasTable bool) string {
+	switch {
+	case hasTable && hasDefault:
+		return fmt.Sprintf("ui.%s.%s (with ui_defaults.%s)", table, column, column)
+	case hasTable:
+		return fmt.Sprintf("ui.%s.%s", table, column)
+	default:
+		return fmt.Sprintf("ui_defaults.%s (as %s.%s)", column, table, column)
+	}
+}
+
+// mergeUIColumn 按字段合并表级条目与兜底声明:表级已声明的字段覆盖兜底,
+// 未声明的字段继承。空字符串 / nil 视为未声明(与 label 空值回落物理列名
+// 的既有语义一致)。options 与 api 是同一"选项来源"槽位:表级声明任一侧
+// 即替换兜底来源;表级同时声明两者时保留原样,交由 applyUIColumn 报互斥。
+func mergeUIColumn(def, table *UIColumn) *UIColumn {
+	if def == nil {
+		return table
+	}
+	if table == nil {
+		return def
+	}
+	merged := *def
+	if table.Label != "" {
+		merged.Label = table.Label
+	}
+	if table.Desc != "" {
+		merged.Desc = table.Desc
+	}
+	if table.Order != nil {
+		merged.Order = table.Order
+	}
+	if table.Visibility != "" {
+		merged.Visibility = table.Visibility
+	}
+	switch {
+	case table.Options != nil && table.API != nil:
+		merged.Options, merged.API = table.Options, table.API
+	case table.Options != nil:
+		merged.Options, merged.API = table.Options, nil
+	case table.API != nil:
+		merged.Options, merged.API = nil, table.API
+	}
+	return &merged
 }
 
 // isEmpty 报告 UI 条目未声明任何字段(对生成无影响 = 死配置)。

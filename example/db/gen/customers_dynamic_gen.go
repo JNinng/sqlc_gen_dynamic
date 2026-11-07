@@ -88,12 +88,12 @@ var customersRegistry = dynq.TableMeta{
 		{
 			Key:        "createdAt",
 			Column:     "created_at",
-			Label:      "created_at",
+			Label:      "创建时间",
 			DataType:   dynq.DataTypeDatetime,
 			Nullable:   false,
 			Ops:        []dynq.Op{dynq.OpGt, dynq.OpGte, dynq.OpLt, dynq.OpLte, dynq.OpBetween},
 			Sortable:   true,
-			Visibility: dynq.VisibilityOptional,
+			Visibility: dynq.VisibilityHidden,
 			Hidden:     false,
 		},
 		{

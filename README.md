@@ -63,7 +63,7 @@ sha256sum bin/sqlc_gen_dynamic.wasm
 
 > 完整参考(语法规则、列级 / 表级指令、PG 类型 → dataType 映射、能力矩阵、预设展开、操作符语义、校验规则与 fail 条件全集)见 [dsl.md](./dsl.md)。
 
-**注释只承载能力指令**,随迁移版本化:列级 `@dynamic`(含 `sort` 能力位)/ `@internal` / `@updatable`,表级 `@default_sort` / `@pk` / `@scope` / `@filter`,涵盖过滤 / 排序 / 行级权限 / 服务端固定不变量 / typed 更新面。指令必须包裹在 `[ ]` 中且内容以 `@` 起始;方括号必须配平(单引号字符串内部除外)。label / desc / order / visibility / options / api 等 UI 元数据走 `sqlc.yaml` 的 `codegen.options.ui`,分页策略走 `options.page`(见 [usage.md](./usage.md));注释里的人类文本不参与生成。旧指令与旧名不做兼容解析,一律生成期 fail。
+**注释只承载能力指令**,随迁移版本化:列级 `@dynamic`(含 `sort` 能力位)/ `@internal` / `@updatable`,表级 `@default_sort` / `@pk` / `@scope` / `@filter`,涵盖过滤 / 排序 / 行级权限 / 服务端固定不变量 / typed 更新面。指令必须包裹在 `[ ]` 中且内容以 `@` 起始;方括号必须配平(单引号字符串内部除外)。label / desc / order / visibility / options / api 等 UI 元数据走 `sqlc.yaml` 的 `codegen.options.ui`(跨表同名的审计字段等可用 `options.ui_defaults` 按列名兜底),分页策略走 `options.page`(见 [usage.md](./usage.md));注释里的人类文本不参与生成。旧指令与旧名不做兼容解析,一律生成期 fail。
 
 示例:
 

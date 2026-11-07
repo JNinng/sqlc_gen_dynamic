@@ -57,11 +57,11 @@ var audit_logsRegistry = dynq.TableMeta{
 		{
 			Key:        "createdAt",
 			Column:     "created_at",
-			Label:      "created_at",
+			Label:      "创建时间",
 			DataType:   dynq.DataTypeDatetime,
 			Nullable:   false,
 			Sortable:   false,
-			Visibility: dynq.VisibilityOptional,
+			Visibility: dynq.VisibilityHidden,
 			Hidden:     false,
 		},
 	},

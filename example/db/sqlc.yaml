@@ -50,11 +50,16 @@ sql:
               projects: {default: 20, max: 100}
           # 前端 UI 元数据:物理表名 → 物理列名 → label / desc / order /
           # visibility / options / api。
+          # 跨表同构字段(created_at 等)用 ui_defaults 按物理列名兜底:
+          # 表级条目同列只覆盖已声明字段,其余继承兜底值。
+          ui_defaults:
+            created_at: {label: 创建时间, visibility: hidden}
           ui:
             users:
               id: {visibility: always}
               email: {label: 电子邮箱, order: 10}
               status: {label: 用户状态, desc: 账号的启用状态, order: 10}
+              created_at: {label: 注册时间, order: 20}
               age:
                 order: -1
                 options:

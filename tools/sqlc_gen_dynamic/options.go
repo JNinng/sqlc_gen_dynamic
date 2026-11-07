@@ -31,6 +31,10 @@ type Options struct {
 	RuntimeImport string `json:"runtime_import"`
 	// Page 分页策略:全局 default/max 与表级覆盖,未声明的字段回落全局值。
 	Page PageOptions `json:"page"`
+	// UIDefaults 是前端 UI 元数据的跨表兜底:物理列名 → 列级 UI 声明。
+	// 对每张入选读面表中同名且非 @internal 的列生效;ui 的表级条目按字段
+	// 覆盖兜底值(未声明的字段继承)。未被任何可见列命中的条目是死配置。
+	UIDefaults map[string]*UIColumn `json:"ui_defaults"`
 	// UI 是前端 UI 元数据:物理表名 → 物理列名 → 列级 UI 声明。
 	// 协议可见性仍由 DDL 注释的 @internal 表达(@internal 列不接受 UI 条目)。
 	UI map[string]map[string]*UIColumn `json:"ui"`

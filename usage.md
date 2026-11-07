@@ -88,7 +88,9 @@ sql:
             tables:
               orders: {default: 20, max: 100}   # 表级覆盖优先
           # 前端 UI 元数据:物理表名 → 物理列名 → label / desc / order / visibility /
-          # options / api:
+          # options / api。跨表同名审计字段(created_at 等)用 ui_defaults 兜底:
+          ui_defaults:
+            created_at: {label: 创建时间, visibility: hidden}
           ui:
             users:
               id: {visibility: always}
@@ -104,7 +106,7 @@ sql:
                 api: {endpoint: /api/v1/users/options, value_key: id, label_key: name}
 ```
 
-**注释只承载能力指令**:列级 `@dynamic`(含 `sort` 能力位)/ `@internal` / `@updatable`,表级 `@default_sort` / `@pk` / `@scope` / `@filter`。label / desc / order / visibility / options / api 等 UI 元数据一律走 `codegen.options.ui`(见下),注释里的人类文本不参与生成。分页策略走 `options.page`。旧指令(`@sortable` / `@hideable` / `@selectable` / `@hidden` / `@page` / `@update` / `@api` / `@label` / `@desc` / `@order` / `@options`)与旧拼写不做兼容解析,一律生成期 fail。DSL 语法、能力矩阵、预设展开与 fail 条件全集见 [dsl.md](./dsl.md)。
+**注释只承载能力指令**:列级 `@dynamic`(含 `sort` 能力位)/ `@internal` / `@updatable`,表级 `@default_sort` / `@pk` / `@scope` / `@filter`。label / desc / order / visibility / options / api 等 UI 元数据走 `codegen.options.ui`(跨表同名审计字段可写 `options.ui_defaults` 兜底,见下),注释里的人类文本不参与生成。分页策略走 `options.page`。旧指令(`@sortable` / `@hideable` / `@selectable` / `@hidden` / `@page` / `@update` / `@api` / `@label` / `@desc` / `@order` / `@options`)与旧拼写不做兼容解析,一律生成期 fail。DSL 语法、能力矩阵、预设展开与 fail 条件全集见 [dsl.md](./dsl.md)。
 
 ### codegen options
 
@@ -119,6 +121,7 @@ sql:
 | `runtime_import` | dynq 运行时包导入路径 |
 | `page` | 分页策略:`{default, max, tables}`。`default`/`max` 为全局值(默认 20/200),`tables` 按物理表名覆盖(表级覆盖优先,未声明的字段回落全局值);校验 `1 ≤ default ≤ max`,`tables` 指向不存在或未入选的表 → 生成期 fail |
 | `ui` | 前端 UI 元数据:`{<表>: {<列>: {label, desc, order, visibility, options, api}}}`。键用物理表名/列名(snake_case);表必须存在、被生成范围选中且有读面,列必须存在且非 `@internal`,否则死配置 fail。未知键严格解码 fail。空 `label` 回落物理列名 |
+| `ui_defaults` | 跨表 UI 兜底:`{<列>: {label, desc, order, visibility, options, api}}`,键为物理列名。对每张入选读面表中同名且非 `@internal` 的列生效,无该列的表跳过;`ui.<表>.<列>` 按字段覆盖(未声明字段继承兜底),`options` 与 `api` 是同一选项来源槽位(表级声明其一即替换兜底来源)。兜底条目必须至少命中一个可见列,否则死配置 fail;同名但 dataType 不同的表按该表实际类型校验,失败定位到 `ui_defaults.<列> (as <表>.<列>)` |
 | `ui.*.visibility` | 前端列表初始显隐:`always`(固定显示)/ `optional`(默认显示、可切换,缺省)/ `hidden`(默认收起、可展开)。只影响前端渲染,不参与服务端校验,不改变默认投影;`hidden` 列仍会被默认查询返回 |
 | `ui.*.options` | 静态字典:`[{value, label}]`;value 按列 dataType 定型(integer → 整数,string/uuid → 字符串),重复 value / 空 label / 类型不符 → 生成期 fail |
 | `ui.*.api` | 远程选项数据源:`{endpoint, value_key, label_key, mode?}`;仅 `integer`/`uuid`/`string` 列,与 `options` 同列互斥 |

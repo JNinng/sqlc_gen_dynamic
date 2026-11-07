@@ -34,7 +34,7 @@ sqlc\_gen\_dynamic 的全部生成能力声明在 DDL 注释中,随迁移版本�
 ### 1.1 边界分隔
 
 指令必须包裹在 `[ ]` 中且内容以 `@` 起始;不以 `@` 起始的方括号是纯文档文本,不参与生成。
-注释只承载能力指令:label / desc / order / visibility / options / api 等 UI 元数据来自 `sqlc.yaml` 的 `codegen.options.ui`(结构见 [usage.md](./usage.md#codegen-options))。
+注释只承载能力指令:label / desc / order / visibility / options / api 等 UI 元数据来自 `sqlc.yaml` 的 `codegen.options.ui`(跨表同名审计字段可用 `options.ui_defaults` 按物理列名兜底,结构见 [usage.md](./usage.md#codegen-options))。
 
 ```sql
 COMMENT ON COLUMN users.email IS '用户邮箱，如 test@example.com [@dynamic: exact, membership, prefix @updatable: set]';
@@ -486,6 +486,8 @@ COMMENT ON TABLE projects IS '项目表 [@scope: tenant_id eq fn_tenant_id(user_
 | `options.ui` 的 `options` 与 `api` 同列组合 | 生成期 fail(一个字段只有一种选项来源) |
 | `options.ui.options` 为空列表 / 类型非 `integer` / `uuid` / `string` / value 类型不符 / 重复 / label 为空 | 生成期 fail |
 | `options.ui.api` 类型非 `integer` / `uuid` / `string` / 缺 `value_key`/`label_key` / `endpoint` 含 `?` 或 `=` / `mode` 非法 | 生成期 fail |
+| `options.ui_defaults` 未命中任何入选读面表的可见列(列不存在 / 未入选 / 全为 `@internal`) | 生成期 fail(死配置) |
+| `options.ui_defaults` 空条目 / 未知键 / visibility 非法 / options 与 api 同列 / 值类型按命中表校验不符 | 生成期 fail(与 `options.ui` 同一套规则) |
 | 无 `@pk` 且出现读侧指令(或经 `options.tables` 点名却既无读面也无更新面) | 生成期 fail(无 `@pk` 的纯更新面合法:set-capable + locate-capable 同时满足) |
 | `@pk` 指向不存在 / 可空 / `@internal` / 游标不可编码类型(`jsonb` / 数组 / 不可映射)的列 | 生成期 fail |
 | `@default_sort` 目标不存在 / `@internal` / 不可映射 / 不可排序 | 生成期 fail |

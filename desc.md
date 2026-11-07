@@ -203,9 +203,11 @@ COMMENT ON TABLE  users            IS '用户表 [@default_sort: created_at DESC
 COMMENT ON TABLE  customers        IS '客户表 [@scope: owner_user_id in fn_accessible_user_ids(user_id:varchar, scopes:int[]) id in fn_permitted(''customers'', user_id:varchar) @pk: id]';
 ```
 
-`options.ui` 是 UI 元数据的唯一来源（结构见 [usage.md](./usage.md#codegen-options)）：
+`options.ui` 与 `options.ui_defaults` 是 UI 元数据的唯一来源（结构见 [usage.md](./usage.md#codegen-options)）:`options.ui_defaults` 提供按物理列名的跨表兜底,表级条目逐字段覆盖,用于 `created_at` / `updated_by` 这类各表同构的审计字段;`options` 与 `api` 是同一选项来源槽位,表级声明其一即替换兜底来源。
 
 ```yaml
+ui_defaults:
+  created_at: {label: 创建时间, visibility: hidden}
 ui:
   users:
     email: {label: 电子邮箱, order: 10}
@@ -761,6 +763,7 @@ schema 输出字段级 `api` 对象：
 | 方括号未配平 / 未知或已删除的 `@` 标签 / **`@internal` 与 `@dynamic` 组合**                     | **生成期 fail**                           |
 | `options.ui.api` 非法（非 integer/uuid/string 列、缺 value_key/label_key、未知键、mode 非法、endpoint 含 `?` 或 `=`） | **生成期 fail**                           |
 | `options.ui` 非法（未知表/列、`@internal` 列、无读面、未入选、visibility 非法、未知键、options 与 api 同列、value 类型不符 / 重复 / label 为空） | **生成期 fail**                           |
+| `options.ui_defaults` 非法（空条目 / 未知键 / 未命中任何可见列 = 死配置 / 按命中表校验的 visibility、options、api 规则不满足） | **生成期 fail**                           |
 | `options.page` 区间非法 / tables 指向不存在或未入选的表                       | **生成期 fail**                           |
 
 ---

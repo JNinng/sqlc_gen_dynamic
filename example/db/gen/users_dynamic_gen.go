@@ -206,13 +206,14 @@ var usersRegistry = dynq.TableMeta{
 		{
 			Key:        "createdAt",
 			Column:     "created_at",
-			Label:      "created_at",
+			Label:      "注册时间",
 			DataType:   dynq.DataTypeDatetime,
 			Nullable:   false,
 			Ops:        []dynq.Op{dynq.OpEq, dynq.OpNeq, dynq.OpIn, dynq.OpNotIn, dynq.OpGt, dynq.OpGte, dynq.OpLt, dynq.OpLte, dynq.OpBetween},
 			Sortable:   true,
-			Visibility: dynq.VisibilityOptional,
+			Visibility: dynq.VisibilityHidden,
 			Hidden:     false,
+			Order:      dynq.IntPtr(20),
 		},
 		{
 			Key:        "updatedAt",

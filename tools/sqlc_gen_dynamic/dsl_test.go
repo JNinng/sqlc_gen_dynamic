@@ -733,6 +733,70 @@ func TestGenerateDSLFailures(t *testing.T) {
 			},
 			wantErr: "not supported for dataType datetime",
 		},
+		// ---- options.ui_defaults fail-closed ----
+		{
+			name: "ui_defaults_null_entry",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui_defaults":{"created_at":null}}`)
+			},
+			wantErr: "ui_defaults.created_at: entry must not be null",
+		},
+		{
+			name: "ui_defaults_empty_entry",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui_defaults":{"created_at":{}}}`)
+			},
+			wantErr: "ui_defaults.created_at: entry must not be empty",
+		},
+		{
+			name: "ui_defaults_unknown_key",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui_defaults":{"created_at":{"lable":"x"}}}`)
+			},
+			wantErr: `unknown field "lable"`,
+		},
+		{
+			name: "ui_defaults_bad_visibility",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui_defaults":{"created_at":{"visibility":"sometimes"}}}`)
+			},
+			wantErr: "visibility must be always|optional|hidden",
+		},
+		{
+			name: "ui_defaults_column_missing",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui_defaults":{"ghost":{"label":"x"}}}`)
+			},
+			wantErr: "ui_defaults.ghost: column not found in any selected read-side table",
+		},
+		{
+			name: "ui_defaults_internal_only",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui_defaults":{"password":{"label":"x"}}}`)
+			},
+			wantErr: "ui_defaults.password: column not found in any selected read-side table",
+		},
+		{
+			name: "ui_defaults_unselected_table",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"tables":["orders"],"ui_defaults":{"name":{"label":"x"}}}`)
+			},
+			wantErr: "ui_defaults.name: column not found in any selected read-side table",
+		},
+		{
+			name: "ui_defaults_datatype_divergence",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui_defaults":{"status":{"options":[{"value":1,"label":"启用"}]}}}`)
+			},
+			wantErr: "ui_defaults.status (as users.status).options[0]: options not supported for dataType enum",
+		},
+		{
+			name: "ui_defaults_merged_options_and_api_conflict",
+			mutate: func(r *pb.GenerateRequest) {
+				r.PluginOptions = []byte(`{"package":"gen",` + cols + `,"ui_defaults":{"age":{"options":[{"value":0,"label":"未知"}]}},"ui":{"users":{"age":{"options":[{"value":1,"label":"成年"}],"api":{"endpoint":"/x","value_key":"id","label_key":"name"}}}}}`)
+			},
+			wantErr: "ui.users.age (with ui_defaults.age): options cannot be combined with api",
+		},
 		// ---- options.page ----
 		{
 			name: "page_global_default_exceeds_max",
@@ -1537,6 +1601,120 @@ func TestUIManifestInjection(t *testing.T) {
 	} {
 		if !strings.Contains(orders, want) {
 			t.Errorf("orders UI api surface missing %q", want)
+		}
+	}
+}
+
+// TestUIDefaultsInjection 覆盖 options.ui_defaults:兜底按列名落到命中表,
+// 表级条目按字段覆盖(label / options→api 的来源替换),未声明字段继承兜底。
+func TestUIDefaultsInjection(t *testing.T) {
+	req := loadGoldenRequest(t)
+	req.PluginOptions = []byte(`{
+		"package": "gen",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"ui_defaults": {
+			"created_at": {"label": "创建时间", "desc": "记录创建时间", "order": 30, "visibility": "hidden"},
+			"age": {"options": [{"value": 0, "label": "未知"}, {"value": 18, "label": "成年"}]}
+		},
+		"ui": {
+			"users": {
+				"created_at": {"label": "创建时间UI"},
+				"age": {"api": {"endpoint": "/api/v1/ages", "value_key": "id", "label_key": "name"}}
+			}
+		}
+	}`)
+	resp, err := Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	users := mustFile(t, resp, "users_dynamic_gen.go")
+	// gofmt 按元素内最长键对齐,断言按"同一行包含"匹配。
+	hasLine := func(src string, parts ...string) bool {
+		for _, line := range strings.FieldsFunc(src, func(r rune) bool { return r == '\n' }) {
+			ok := true
+			for _, p := range parts {
+				if !strings.Contains(line, p) {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return true
+			}
+		}
+		return false
+	}
+	for _, tc := range []struct {
+		name  string
+		parts []string
+	}{
+		// 表级 label 覆盖兜底,desc / order / visibility 继承兜底值。
+		{"users_label_override", []string{"Label:", `"创建时间UI",`}},
+		{"users_desc_inherited", []string{"Desc:", `"记录创建时间",`}},
+		{"users_order_inherited", []string{"Order:", "dynq.IntPtr(30),"}},
+		{"users_visibility_inherited", []string{"Visibility:", "dynq.VisibilityHidden,"}},
+		// 表级 api 替换兜底的 options 来源(同一槽位,不并存)。
+		{"age_api_replaces_options", []string{"API:", "&dynq.FieldAPI{"}},
+	} {
+		if !hasLine(users, tc.parts...) {
+			t.Errorf("users UI defaults surface missing %s (%v)", tc.name, tc.parts)
+		}
+	}
+	if strings.Contains(users, `Label: "未知"`) {
+		t.Error("table-level api must replace the inherited options source")
+	}
+	orders := mustFile(t, resp, "orders_dynamic_gen.go")
+	for _, want := range []string{`Label:`, `"创建时间",`, "dynq.VisibilityHidden,"} {
+		if !strings.Contains(orders, want) {
+			t.Errorf("orders must inherit ui_defaults.created_at, missing %q", want)
+		}
+	}
+}
+
+// TestUIDefaultsExpansionMatchesExplicitUI 锁定兜底层只是书写糖:兜底展开
+// 后的产物与逐表手写完全一致;无该列的表(sys_user)被跳过而不是死配置。
+func TestUIDefaultsExpansionMatchesExplicitUI(t *testing.T) {
+	generate := func(t *testing.T, options string) map[string]string {
+		t.Helper()
+		req := loadGoldenRequest(t)
+		req.PluginOptions = []byte(options)
+		resp, err := Generate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		out := make(map[string]string, len(resp.Files))
+		for _, f := range resp.Files {
+			out[f.Name] = string(f.Contents)
+		}
+		return out
+	}
+	withDefaults := generate(t, `{
+		"package": "gen",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"ui_defaults": {"created_at": {"label": "创建时间", "visibility": "hidden"}},
+		"ui": {"users": {"email": {"label": "电子邮箱"}}}
+	}`)
+	explicit := generate(t, `{
+		"package": "gen",
+		"runtime_import": "github.com/jninng/sqlc_gen_dynamic/dynq",
+		"ui": {
+			"users": {"email": {"label": "电子邮箱"}, "created_at": {"label": "创建时间", "visibility": "hidden"}},
+			"orders": {"created_at": {"label": "创建时间", "visibility": "hidden"}},
+			"customers": {"created_at": {"label": "创建时间", "visibility": "hidden"}},
+			"projects": {"created_at": {"label": "创建时间", "visibility": "hidden"}},
+			"audit_logs": {"created_at": {"label": "创建时间", "visibility": "hidden"}}
+		}
+	}`)
+	if len(withDefaults) != len(explicit) {
+		t.Fatalf("file set differs: %d vs %d", len(withDefaults), len(explicit))
+	}
+	for name, want := range explicit {
+		got, ok := withDefaults[name]
+		if !ok {
+			t.Fatalf("%s: missing from ui_defaults run", name)
+		}
+		if got != want {
+			t.Errorf("%s: ui_defaults expansion differs from explicit ui declarations", name)
 		}
 	}
 }
